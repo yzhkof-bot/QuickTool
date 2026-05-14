@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+    <title>QuickTool · 设备日志分析</title>
+    <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./adb-log.css" />
+  </head>
+  <body class="adb-body">
+    <header class="adb-toolbar">
+      <div class="row row-1">
+        <div class="field">
+          <label>平台</label>
+          <select id="platformSelect" class="sel" title="切换 Android(adb) / HarmonyOS(hdc)"></select>
+        </div>
+        <div class="field">
+          <label>设备</label>
+          <select id="deviceSelect" class="sel"></select>
+          <button id="btnRefreshDevices" class="icon-btn" title="刷新设备列表">↻</button>
+          <button id="btnDiag" class="icon-btn" title="看不到设备 / 命令报错时点这里诊断">ⓘ</button>
+          <span id="adbStatus" class="adb-status"></span>
+        </div>
+
+        <div class="field grow">
+          <label>包名</label>
+          <input id="packageInput" class="inp" type="text" list="packageList" placeholder="com.example.app（可选）" autocomplete="off" />
+          <datalist id="packageList"></datalist>
+          <button id="btnLoadPackages" class="btn-sm" title="加载设备包列表">📦</button>
+          <button id="btnLockPid" class="btn-sm" title="解析当前 PID 并锁定">🎯</button>
+          <span id="pidLabel" class="pid-label"></span>
+        </div>
+      </div>
+
+      <div class="row row-2">
+        <div class="field">
+          <label>Tag</label>
+          <input id="tagFilter" class="inp" type="text" placeholder="ActivityManager,MyTag…" />
+        </div>
+        <div class="field">
+          <label>Level</label>
+          <select id="levelFilter" class="sel">
+            <option value="V">V (Verbose 及以上)</option>
+            <option value="D" selected>D (Debug 及以上)</option>
+            <option value="I">I (Info 及以上)</option>
+            <option value="W">W (Warn 及以上)</option>
+            <option value="E">E (Error 及以上)</option>
+            <option value="F">F (Fatal)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>PID</label>
+          <input id="pidFilter" class="inp pid-input" type="text" placeholder="可选" />
+        </div>
+        <div class="field grow">
+          <label>关键字</label>
+          <div id="kwChips" class="chips-input">
+            <input id="kwInput" type="text" placeholder="回车添加；以 ! 开头表示排除" autocomplete="off" />
+          </div>
+        </div>
+        <div class="field">
+          <label class="chk"><input id="regexToggle" type="checkbox" /> 正则</label>
+          <label class="chk"><input id="highlightToggle" type="checkbox" checked /> 高亮</label>
+          <label class="chk"><input id="autoScrollToggle" type="checkbox" checked /> 自动滚动</label>
+        </div>
+      </div>
+
+      <div class="row row-3">
+        <button id="btnStart" class="btn primary">▶ 开始</button>
+        <button id="btnStop" class="btn" disabled>■ 停止</button>
+        <button id="btnPause" class="btn" disabled>⏸ 暂停</button>
+        <button id="btnClearView" class="btn">🧹 清屏</button>
+        <button id="btnClearDevice" class="btn" title="adb logcat -c">🗑 清设备缓存</button>
+        <button id="btnSave" class="btn">💾 保存</button>
+        <button id="btnImport" class="btn">📁 导入文件</button>
+        <button id="btnSummary" class="btn">📊 摘要</button>
+        <span class="spacer"></span>
+        <span id="lineCount" class="muted">0 行</span>
+      </div>
+    </header>
+
+    <main class="adb-main">
+      <div id="summaryPanel" class="summary-panel hidden"></div>
+      <div class="log-wrap">
+        <div id="searchBar" class="search-bar hidden">
+          <div class="sb-input-wrap">
+            <input id="sbInput" type="text" placeholder="搜索（当前缓冲区视图）…" autocomplete="off" spellcheck="false" />
+            <button id="sbCase" class="sb-toggle" title="区分大小写 (Alt+C)">Aa</button>
+            <button id="sbWord" class="sb-toggle" title="全字匹配 (Alt+W)">⟮ab⟯</button>
+            <button id="sbRegex" class="sb-toggle" title="正则 (Alt+R)">.*</button>
+          </div>
+          <span id="sbCount" class="sb-count">无结果</span>
+          <button id="sbPrev" class="sb-btn" title="上一个 (Shift+Enter / Shift+F3)">▲</button>
+          <button id="sbNext" class="sb-btn" title="下一个 (Enter / F3)">▼</button>
+          <button id="sbClose" class="sb-btn" title="关闭 (Esc)">✕</button>
+        </div>
+        <div id="logArea" class="log-area"></div>
+      </div>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="./adb-log.js"></script>
+  </body>
+</html>

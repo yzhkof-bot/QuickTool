@@ -1,0 +1,5 @@
+{
+  "name": "打开当前目录",
+  "description": "用文件管理器打开 scripts 目录。",
+  "category": "示例"
+}

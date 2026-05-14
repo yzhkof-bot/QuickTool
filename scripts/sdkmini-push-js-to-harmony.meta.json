@@ -1,0 +1,6 @@
+{
+  "name": "Push JS 到鸿蒙（sdkmini）",
+  "description": "在 E:\\sdkmini\\Program\\TsScripts 下执行 npm run tool:pushJSToHarmony，把 JS 推到鸿蒙设备（默认包名 com.tencent.tmgp.sgametest，可用 HARMONY_BUNDLE 覆盖）。",
+  "category": "鸿蒙",
+  "console": "keep"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "TS Watch（sdkmini）",
+  "description": "在 E:\\sdkmini\\Program\\TsScripts 下执行 npm run watch，长驻监听 TS 编译。",
+  "category": "鸿蒙",
+  "console": "keep"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "解包 .har（鸿蒙）",
+  "description": "解包 OpenHarmony .har（本质 gzip tar），可批量解包、打印 oh-package.json5 / Index.d.ets 摘要、在 modules.abc 等二进制里按关键字定位符号所在 har。",
+  "category": "鸿蒙",
+  "console": "keep"
+}

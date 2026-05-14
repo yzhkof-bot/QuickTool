@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+    <title>QuickTool · 真机文件浏览器</title>
+    <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./device-files.css" />
+  </head>
+  <body class="df-body">
+    <header class="df-toolbar">
+      <div class="df-row">
+        <div class="field">
+          <label>平台</label>
+          <select id="platformSelect" class="sel"></select>
+        </div>
+        <div class="field grow">
+          <label>设备</label>
+          <select id="deviceSelect" class="sel"></select>
+          <button id="btnRefreshDevices" class="icon-btn" title="刷新设备">↻</button>
+          <button id="btnDiag" class="icon-btn" title="诊断 adb / hdc 路径和设备连接">ⓘ</button>
+          <span id="status" class="df-status"></span>
+        </div>
+      </div>
+      <div id="sandboxRow" class="df-row hidden">
+        <div class="field grow">
+          <label>Bundle</label>
+          <input id="bundleInput" class="inp bundle-inp" type="text" list="bundleList" placeholder="com.example.app" autocomplete="off" spellcheck="false" />
+          <datalist id="bundleList"></datalist>
+          <button id="btnLoadBundles" class="btn">加载应用</button>
+        </div>
+        <span class="hint">HarmonyOS 使用 <code>hdc shell/file -b BundleName</code> 浏览可调试应用沙箱</span>
+      </div>
+      <div class="df-row">
+        <button id="btnUp" class="btn" title="返回上级目录">↑ 上级</button>
+        <button id="btnRoot" class="btn" title="回到当前平台默认可读目录">默认目录</button>
+        <div class="field grow">
+          <label>路径</label>
+          <input id="pathInput" class="inp path-inp" value="/" spellcheck="false" autocomplete="off" />
+        </div>
+        <button id="btnGo" class="btn primary">打开</button>
+        <button id="btnRefresh" class="btn">刷新</button>
+        <button id="btnPull" class="btn" disabled>拉取到本地</button>
+      </div>
+    </header>
+
+    <main class="df-main">
+      <aside id="diagPanel" class="diag-panel hidden"></aside>
+      <section class="file-panel">
+        <div id="crumbs" class="crumbs"></div>
+        <div id="fileTableWrap" class="file-table-wrap">
+          <table class="file-table">
+            <thead>
+              <tr>
+                <th class="name-col">名称</th>
+                <th>类型</th>
+                <th>大小</th>
+                <th>修改时间</th>
+                <th>权限</th>
+                <th>Owner</th>
+              </tr>
+            </thead>
+            <tbody id="fileRows"></tbody>
+          </table>
+          <div id="empty" class="df-empty hidden">目录为空</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="footerText">就绪</span>
+      <span class="status-spacer"></span>
+      <span id="itemCount"></span>
+    </footer>
+
+    <div id="toast" class="toast hidden"></div>
+    <div id="contextMenu" class="context-menu hidden">
+      <button type="button" data-action="upload">上传文件</button>
+      <button type="button" data-action="pull" data-requires-selection="true">拉取到本地</button>
+      <button type="button" data-action="open" data-requires-selection="true">直接打开</button>
+      <button type="button" data-action="properties" data-requires-selection="true">属性</button>
+      <button type="button" data-action="delete" data-requires-selection="true" class="danger">删除</button>
+    </div>
+    <div id="propertiesModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <div class="modal-title">属性</div>
+            <div id="propertiesSubtitle" class="modal-subtitle"></div>
+          </div>
+          <button id="btnCloseProperties" class="modal-close" type="button">✕</button>
+        </div>
+        <div id="propertiesBody" class="modal-body"></div>
+      </div>
+    </div>
+
+    <script src="./device-files.js"></script>
+  </body>
+</html>

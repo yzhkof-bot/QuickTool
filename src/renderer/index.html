@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+    <title>QuickTool</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span class="brand-name">QuickTool</span>
+      </div>
+      <div class="search">
+        <input id="searchInput" type="text" placeholder="搜索脚本... (按名称 / 描述 / 分组)" autocomplete="off" />
+      </div>
+      <div class="actions">
+        <button id="btnScreenshot" class="icon-btn" title="截图 / 标注">✂</button>
+        <button id="btnGifCapture" class="icon-btn" title="开始 / 停止 GIF 录制">GIF</button>
+        <button id="btnVideoToGif" class="icon-btn" title="视频文件转 GIF">🎞</button>
+        <button id="btnAdbLog" class="icon-btn" title="设备日志分析（adb / hdc）">📱</button>
+        <button id="btnDeviceFiles" class="icon-btn" title="真机文件浏览器（adb / hdc）">🗂</button>
+        <button id="btnOpenDir" class="icon-btn" title="打开脚本目录">📁</button>
+        <button id="btnRefresh" class="icon-btn" title="刷新">↻</button>
+      </div>
+    </header>
+
+    <main id="content" class="content">
+      <div id="empty" class="empty hidden">
+        <div class="empty-title">还没有脚本</div>
+        <div class="empty-tip">把 <code>.ps1 / .bat / .cmd / .py / .exe / .js</code> 文件放到下面的目录，UI 会自动刷新。</div>
+        <button id="btnOpenDirEmpty" class="primary-btn">打开脚本目录</button>
+        <div class="empty-path" id="scriptsPathLabel"></div>
+      </div>
+      <div id="groups" class="groups"></div>
+    </main>
+
+    <footer class="statusbar">
+      <span id="statusText">就绪</span>
+      <span class="status-spacer"></span>
+      <span id="scriptCount"></span>
+    </footer>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

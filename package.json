@@ -1,0 +1,35 @@
+{
+  "name": "quicktool",
+  "version": "0.1.0",
+  "description": "常驻系统托盘的轻量级脚本启动器",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electronmon ."
+  },
+  "electronmon": {
+    "patterns": [
+      "src/**/*",
+      "assets/**/*",
+      "!scripts/**/*",
+      "!**/*.log"
+    ],
+    "logLevel": "quiet"
+  },
+  "keywords": [
+    "electron",
+    "tray",
+    "launcher",
+    "scripts"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electronmon": "^2.0.4"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "ffmpeg-static": "^5.3.0"
+  }
+}
