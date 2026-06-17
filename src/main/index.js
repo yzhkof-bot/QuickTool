@@ -9,6 +9,7 @@ const logPlatforms = require('./logPlatforms');
 const { createAdbWindow, getAdbWindow } = require('./adbWindow');
 const { createDeviceFilesWindow, getDeviceFilesWindow } = require('./deviceFilesWindow');
 const { QuickCaptureTool } = require('./captureTool');
+const aiLogChat = require('./aiLogChat');
 
 const SCRIPTS_DIR = path.join(app.getAppPath(), 'scripts');
 const APP_ICON_PATH = path.join(app.getAppPath(), 'assets', 'tray-icon.png');
@@ -117,8 +118,17 @@ function openLogWindow() {
         clearTimeout(flushTimer);
         flushTimer = null;
       }
+      // 顺手把 AI 会话也关掉，避免 CLI 子进程在后台漂着
+      try { aiLogChat.closeActive(); } catch (_) { /* ignore */ }
     },
   });
+}
+
+function sendAiEvent(payload) {
+  const win = getAdbWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('ai:event', payload);
+  }
 }
 
 function openDeviceFilesWindow() {
@@ -497,6 +507,85 @@ function registerIpc() {
     if (!target.path) return { ok: false, error: '未选择远端路径' };
     return pf(platformId).collectFileProperties(serial, target.path, options || {});
   });
+
+  // ===== AI 日志分析（codebuddy agent SDK） =====
+  ipcMain.handle('ai:health', () => aiLogChat.health());
+
+  ipcMain.handle('ai:create', async (_e, payload) => {
+    const data = payload || {};
+    try {
+      const info = await aiLogChat.create({
+        initialLog: String(data.initialLog || ''),
+        context: data.context || {},
+        model: data.model || '',
+        onEvent: (ev) => sendAiEvent(ev),
+        log: (text) => { try { process.stderr.write(text); } catch (_) { /* ignore */ } },
+      });
+      return { ok: true, info };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('ai:appendLog', async (_e, chunk) => {
+    try {
+      await aiLogChat.appendLog(String(chunk || ''));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('ai:send', async (_e, text) => {
+    try {
+      // 这里不 await，避免占住 IPC channel；事件会通过 ai:event 推回去
+      aiLogChat.send(String(text || ''))
+        .catch((err) => sendAiEvent({
+          type: 'error',
+          message: err && err.message ? err.message : String(err),
+        }));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('ai:interrupt', async () => {
+    try {
+      await aiLogChat.interrupt();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('ai:setModel', async (_e, model) => {
+    try {
+      await aiLogChat.setModel(String(model || ''));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('ai:listModels', async (_e, opts) => {
+    try {
+      const force = !!(opts && opts.force);
+      const res = await aiLogChat.listModels(force);
+      return { ok: true, models: res.models, fromSdk: res.fromSdk };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('ai:close', () => {
+    try { aiLogChat.closeActive(); } catch (_) { /* ignore */ }
+    return { ok: true };
+  });
+
+  ipcMain.handle('ai:info', () => {
+    return { ok: true, info: aiLogChat.getActiveInfo() };
+  });
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -555,6 +644,11 @@ if (!gotLock) {
     }
     try {
       if (captureTool) captureTool.cleanup();
+    } catch (_) {
+      // ignore
+    }
+    try {
+      aiLogChat.closeActive();
     } catch (_) {
       // ignore
     }

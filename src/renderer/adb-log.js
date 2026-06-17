@@ -27,6 +27,8 @@
     pidFilter: $('pidFilter'),
     kwChips: $('kwChips'),
     kwInput: $('kwInput'),
+    kwHistoryBtn: $('kwHistoryBtn'),
+    kwHistoryPanel: $('kwHistoryPanel'),
     regexToggle: $('regexToggle'),
     highlightToggle: $('highlightToggle'),
     autoScrollToggle: $('autoScrollToggle'),
@@ -54,6 +56,19 @@
     sbPrev: $('sbPrev'),
     sbNext: $('sbNext'),
     sbClose: $('sbClose'),
+
+    // AI 分析面板
+    btnAi: $('btnAi'),
+    aiPanel: $('aiPanel'),
+    aiResizer: $('aiResizer'),
+    aiBtnClose: $('aiBtnClose'),
+    aiBtnReset: $('aiBtnReset'),
+    aiBtnSend: $('aiBtnSend'),
+    aiBtnStop: $('aiBtnStop'),
+    aiInput: $('aiInput'),
+    aiMessages: $('aiMessages'),
+    aiStatus: $('aiStatus'),
+    aiModelSelect: $('aiModelSelect'),
   };
 
   // ===== 状态 =====
@@ -83,6 +98,9 @@
 
   // 关键字胶囊：每项是字符串，! 前缀表示排除
   const keywords = [];
+  const KW_HISTORY_KEY = 'quickTool.log.keywordHistory';
+  const MAX_KW_HISTORY = 30;
+  const keywordHistory = [];
 
   let toastTimer = null;
 
@@ -609,6 +627,8 @@
       renderedFromIdx = Math.max(0, renderedFromIdx - drop);
     }
     appendNew();
+    // 把原始行同步给 AI 后端：建立过会话才会真的写文件
+    if (window.__aiMirror) window.__aiMirror.push(rawLines);
   }
 
   function pushStderr(text) {
@@ -617,6 +637,7 @@
       buffer.push({ raw: l, kind: 'stderr', time: '', pid: '', tid: '', level: 'S', tag: '', msg: l });
     }
     appendNew();
+    if (window.__aiMirror) window.__aiMirror.push(lines);
   }
 
   // ===== 设备 / 包名 =====
@@ -908,16 +929,16 @@
     else if (!res.canceled) showToast('保存失败：' + (res.error || ''), 'error');
   }
 
-  async function importFile() {
-    const res = await api.importFile();
-    if (!res.ok) {
-      if (!res.canceled) showToast('导入失败：' + (res.error || ''), 'error');
-      return;
-    }
+  function getImportedFileName(pathOrName) {
+    return String(pathOrName || '日志文件').split(/[\\/]/).pop();
+  }
+
+  async function loadImportedContent(content, pathOrName) {
     if (isRunning) await stopLogcat();
     buffer.length = 0;
     renderedFromIdx = 0;
-    const lines = res.content.split(/\r?\n/);
+    pendingDuringPause = [];
+    const lines = String(content || '').split(/\r?\n/);
     for (const raw of lines) {
       if (!raw) continue;
       const line = parseLine(raw);
@@ -927,8 +948,43 @@
       buffer.splice(0, buffer.length - MAX_BUFFER);
     }
     rerenderAll();
-    setStatus('idle', `已导入 ${res.path.split(/[\\/]/).pop()} · ${buffer.length} 行`);
+    setStatus('idle', `已导入 ${getImportedFileName(pathOrName)} · ${buffer.length} 行`);
     showToast(`已导入 ${buffer.length} 行`, 'success');
+  }
+
+  async function importFile() {
+    const res = await api.importFile();
+    if (!res.ok) {
+      if (!res.canceled) showToast('导入失败：' + (res.error || ''), 'error');
+      return;
+    }
+    await loadImportedContent(res.content, res.path);
+  }
+
+  function hasDraggedFiles(e) {
+    const types = e.dataTransfer && Array.from(e.dataTransfer.types || []);
+    return Boolean(types && types.includes('Files'));
+  }
+
+  function setLogDropActive(active) {
+    els.logArea.classList.toggle('drop-active', active);
+  }
+
+  function handleLogDrag(e) {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setLogDropActive(true);
+  }
+
+  async function importDroppedFile(file) {
+    if (!file) return;
+    try {
+      const content = await file.text();
+      await loadImportedContent(content, file.name || '拖入文件');
+    } catch (err) {
+      showToast('导入失败：' + (err && err.message ? err.message : String(err)), 'error');
+    }
   }
 
   // ===== 摘要 =====
@@ -1082,13 +1138,22 @@
       if (e.key === 'Enter' || e.key === ',' || (e.key === 'Tab' && els.kwInput.value.trim())) {
         e.preventDefault();
         addKeyword(els.kwInput.value);
+        toggleKeywordHistory(false);
       } else if (e.key === 'Backspace' && els.kwInput.value === '' && keywords.length > 0) {
         e.preventDefault();
         removeKeyword(keywords.length - 1);
-      } else if (e.key === 'Escape' && els.kwInput.value !== '') {
+      } else if (e.key === 'Escape') {
         e.preventDefault();
-        els.kwInput.value = '';
+        if (els.kwInput.value !== '') els.kwInput.value = '';
+        toggleKeywordHistory(false);
+      } else if (e.key === 'ArrowDown' && !els.kwInput.value.trim()) {
+        e.preventDefault();
+        toggleKeywordHistory(true);
       }
+    });
+
+    els.kwInput.addEventListener('input', () => {
+      if (!els.kwHistoryPanel.classList.contains('hidden')) renderKeywordHistory();
     });
 
     // 失焦时把未提交的文本也变成 chip，避免用户「以为已应用其实没」
@@ -1106,6 +1171,21 @@
       tokens.forEach((t) => addKeyword(t));
     });
 
+    els.kwHistoryBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    els.kwHistoryBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleKeywordHistory();
+      els.kwInput.focus();
+    });
+    els.kwHistoryPanel.addEventListener('mousedown', (e) => e.preventDefault());
+    els.kwHistoryPanel.addEventListener('click', (e) => {
+      const item = e.target.closest('.kw-history-item');
+      if (!item) return;
+      addKeyword(item.getAttribute('data-kw') || '');
+      toggleKeywordHistory(false);
+      els.kwInput.focus();
+    });
+
     els.btnStart.addEventListener('click', startLogcat);
     els.btnStop.addEventListener('click', stopLogcat);
     els.btnPause.addEventListener('click', pauseLogcat);
@@ -1114,6 +1194,33 @@
     els.btnSave.addEventListener('click', saveLogs);
     els.btnImport.addEventListener('click', importFile);
     els.btnSummary.addEventListener('click', toggleSummary);
+
+    els.logArea.addEventListener('dragenter', handleLogDrag);
+    els.logArea.addEventListener('dragover', handleLogDrag);
+    els.logArea.addEventListener('dragleave', (e) => {
+      if (!els.logArea.contains(e.relatedTarget)) setLogDropActive(false);
+    });
+    els.logArea.addEventListener('drop', (e) => {
+      if (!hasDraggedFiles(e)) return;
+      e.preventDefault();
+      setLogDropActive(false);
+      const files = Array.from(e.dataTransfer.files || []);
+      if (!files.length) {
+        showToast('无法读取拖入文件', 'error');
+        return;
+      }
+      if (files.length > 1) showToast('已拖入多个文件，仅导入第一个', 'info');
+      importDroppedFile(files[0]);
+    });
+
+    document.addEventListener('dragover', (e) => {
+      if (hasDraggedFiles(e)) e.preventDefault();
+    });
+    document.addEventListener('drop', (e) => {
+      if (!hasDraggedFiles(e)) return;
+      e.preventDefault();
+      setLogDropActive(false);
+    });
 
     els.summaryPanel.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-jump]');
@@ -1148,6 +1255,10 @@
     els.sbPrev.addEventListener('click', prevMatch);
     els.sbNext.addEventListener('click', nextMatch);
     els.sbClose.addEventListener('click', closeSearch);
+
+    document.addEventListener('click', (e) => {
+      if (!els.kwChips.contains(e.target)) toggleKeywordHistory(false);
+    });
 
     window.addEventListener('keydown', (e) => {
       const isCtrl = e.ctrlKey || e.metaKey;
@@ -1219,6 +1330,9 @@
     // “选到鸿蒙却还显示 Android 诊断提示”这种串台情况。
     els.summaryPanel.classList.add('hidden');
     els.summaryPanel.innerHTML = '';
+    if (typeof window.__aiOnSwitchPlatform === 'function') {
+      try { window.__aiOnSwitchPlatform(); } catch (_) { /* ignore */ }
+    }
     if (searchState.open) {
       searchState.matches = [];
       searchState.current = -1;
@@ -1248,6 +1362,81 @@
   }
 
   // ===== 关键字胶囊管理 =====
+  function loadKeywordHistory() {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(KW_HISTORY_KEY) || '[]');
+      const seen = new Set();
+      keywordHistory.length = 0;
+      for (const item of Array.isArray(saved) ? saved : []) {
+        const v = String(item || '').trim();
+        if (!v || seen.has(v)) continue;
+        seen.add(v);
+        keywordHistory.push(v);
+        if (keywordHistory.length >= MAX_KW_HISTORY) break;
+      }
+    } catch (_) {
+      keywordHistory.length = 0;
+    }
+  }
+
+  function saveKeywordHistory() {
+    try {
+      window.localStorage.setItem(KW_HISTORY_KEY, JSON.stringify(keywordHistory));
+    } catch (_) {
+      // localStorage 不可用时不影响关键字过滤本身。
+    }
+  }
+
+  function rememberKeyword(text) {
+    const v = String(text || '').trim();
+    if (!v) return;
+    const oldIdx = keywordHistory.indexOf(v);
+    if (oldIdx >= 0) keywordHistory.splice(oldIdx, 1);
+    keywordHistory.unshift(v);
+    if (keywordHistory.length > MAX_KW_HISTORY) keywordHistory.length = MAX_KW_HISTORY;
+    saveKeywordHistory();
+    renderKeywordHistory();
+  }
+
+  function toggleKeywordHistory(force) {
+    if (!els.kwHistoryPanel) return;
+    renderKeywordHistory();
+    const shouldShow = typeof force === 'boolean'
+      ? force
+      : els.kwHistoryPanel.classList.contains('hidden');
+    els.kwHistoryPanel.classList.toggle('hidden', !shouldShow);
+  }
+
+  function renderKeywordHistory() {
+    if (!els.kwHistoryPanel) return;
+    els.kwHistoryPanel.innerHTML = '';
+    const query = (els.kwInput.value || '').trim().toLowerCase();
+    const available = keywordHistory.filter((kw) =>
+      !keywords.includes(kw) && (!query || kw.toLowerCase().includes(query))
+    );
+    if (!available.length) {
+      const empty = document.createElement('div');
+      empty.className = 'kw-history-empty';
+      empty.textContent = keywordHistory.length
+        ? (query ? '没有匹配的历史关键字' : '历史关键字都已添加')
+        : '暂无历史关键字';
+      els.kwHistoryPanel.appendChild(empty);
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    available.forEach((kw) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'kw-history-item' + (kw.startsWith('!') && kw.length > 1 ? ' exclude' : '');
+      btn.setAttribute('data-kw', kw);
+      btn.title = kw.startsWith('!') && kw.length > 1 ? `排除：${kw.slice(1)}` : `包含：${kw}`;
+      btn.textContent = kw;
+      frag.appendChild(btn);
+    });
+    els.kwHistoryPanel.appendChild(frag);
+  }
+
   function addKeyword(text) {
     const v = (text || '').trim();
     if (!v) return false;
@@ -1263,8 +1452,10 @@
       return false;
     }
     keywords.push(v);
+    rememberKeyword(v);
     renderChips();
     els.kwInput.value = '';
+    renderKeywordHistory();
     filterCache = null;
     rerenderAll();
     return true;
@@ -1274,6 +1465,7 @@
     if (idx < 0 || idx >= keywords.length) return;
     keywords.splice(idx, 1);
     renderChips();
+    renderKeywordHistory();
     filterCache = null;
     rerenderAll();
   }
@@ -1282,6 +1474,7 @@
     if (keywords.length === 0) return;
     keywords.length = 0;
     renderChips();
+    renderKeywordHistory();
     filterCache = null;
     rerenderAll();
   }
@@ -1326,11 +1519,624 @@
       : '回车添加；以 ! 开头表示排除';
   }
 
+  // ============================================================
+  // AI 分析面板（codebuddy agent SDK）
+  // ============================================================
+  // 设计：
+  //  - 第一次按"发送"时调 ai:create，把当前 buffer 转成纯文本日志 dump 给后端；
+  //    后端开 SDK Session，cwd 锁在 dump 文件所在目录，agent 用 Read/Grep 自取。
+  //  - buffer 后续增长时，原始行通过 window.__aiMirror.push 同步追加到 dump 文件。
+  //  - "重置"按钮 = 关掉旧会话 + 让下次发送时重新 ai:create。
+  function setupAiPanel() {
+    const aiApi = window.quickTool && window.quickTool.ai;
+    if (!aiApi) {
+      // preload 缺少 ai 桥；按钮不可用
+      if (els.btnAi) els.btnAi.disabled = true;
+      return;
+    }
+
+    const state = {
+      open: false,
+      sessionReady: false,
+      sending: false,
+      healthChecked: false,
+      healthOk: false,
+      healthReason: '',
+      /** 占位列表（Auto）是否渲染过 */
+      placeholderRendered: false,
+      /** 是否已经从 SDK 拉到真实列表 */
+      realModelsLoaded: false,
+      /** 真实列表加载是否正在进行中 */
+      loadingRealModels: false,
+      /** 真实列表加载完后是否已经应用过偏好默认；只跑一次，防覆盖用户后续手选 */
+      defaultModelApplied: false,
+      selectedModel: '',
+      currentAssistant: null, // 当前正在写入的 assistant 气泡描述
+    };
+
+    const PREF_HINT = 'opus4.7';
+
+    function setStatusEl(text, kind) {
+      if (!els.aiStatus) return;
+      els.aiStatus.textContent = text || '';
+      els.aiStatus.dataset.kind = kind || 'info';
+      els.aiStatus.hidden = !text;
+    }
+
+    function openPanel() {
+      if (!els.aiPanel) return;
+      state.open = true;
+      els.aiPanel.classList.remove('collapsed');
+      if (els.aiResizer) els.aiResizer.classList.remove('collapsed');
+      if (!state.healthChecked) void checkHealth();
+      renderPlaceholderModels();
+      // 打开面板就异步拉模型；不依赖会话是否建立
+      if (!state.realModelsLoaded && !state.loadingRealModels) void loadRealModels();
+      setTimeout(() => els.aiInput && els.aiInput.focus(), 50);
+    }
+    function closePanel() {
+      state.open = false;
+      if (els.aiPanel) els.aiPanel.classList.add('collapsed');
+      if (els.aiResizer) els.aiResizer.classList.add('collapsed');
+    }
+    function togglePanel() {
+      if (state.open) closePanel(); else openPanel();
+    }
+
+    // ===== 宽度持久化 + 拖拽改宽 =====
+    const AI_WIDTH_KEY = 'quickTool.ai.panelWidth';
+    function restoreAiWidth() {
+      try {
+        const v = parseInt(window.localStorage.getItem(AI_WIDTH_KEY) || '', 10);
+        if (Number.isFinite(v) && v > 0) {
+          els.aiPanel.style.width = clampAiWidth(v) + 'px';
+        }
+      } catch (_) { /* ignore */ }
+    }
+    function clampAiWidth(px) {
+      const container = els.aiPanel.parentElement;
+      const totalW = (container && container.clientWidth) || window.innerWidth;
+      const minW = 280;
+      // 给左边日志区至少留 240px，再不超过 75% 容器宽
+      const maxW = Math.max(minW, Math.min(totalW * 0.75, totalW - 240));
+      return Math.max(minW, Math.min(maxW, px));
+    }
+    function setupAiResizer() {
+      if (!els.aiResizer || !els.aiPanel) return;
+      restoreAiWidth();
+      let dragging = false;
+      let startX = 0;
+      let startWidth = 0;
+      const onMove = (e) => {
+        if (!dragging) return;
+        const dx = startX - e.clientX; // 鼠标越往左，面板宽度越大
+        const next = clampAiWidth(startWidth + dx);
+        els.aiPanel.style.width = next + 'px';
+      };
+      const onUp = () => {
+        if (!dragging) return;
+        dragging = false;
+        els.aiResizer.classList.remove('dragging');
+        els.aiPanel.classList.remove('dragging');
+        document.body.classList.remove('ai-resizing');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        try {
+          const w = els.aiPanel.getBoundingClientRect().width;
+          window.localStorage.setItem(AI_WIDTH_KEY, String(Math.round(w)));
+        } catch (_) { /* ignore */ }
+      };
+      els.aiResizer.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        if (els.aiPanel.classList.contains('collapsed')) return;
+        e.preventDefault();
+        dragging = true;
+        startX = e.clientX;
+        startWidth = els.aiPanel.getBoundingClientRect().width;
+        els.aiResizer.classList.add('dragging');
+        els.aiPanel.classList.add('dragging');
+        document.body.classList.add('ai-resizing');
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+      // 双击复位默认宽
+      els.aiResizer.addEventListener('dblclick', () => {
+        els.aiPanel.style.width = '';
+        try { window.localStorage.removeItem(AI_WIDTH_KEY); } catch (_) { /* ignore */ }
+      });
+      // 窗口尺寸变化时夹一下，避免超出
+      window.addEventListener('resize', () => {
+        if (els.aiPanel.classList.contains('collapsed')) return;
+        const cur = els.aiPanel.getBoundingClientRect().width;
+        const fixed = clampAiWidth(cur);
+        if (Math.abs(fixed - cur) > 1) {
+          els.aiPanel.style.width = fixed + 'px';
+        }
+      });
+    }
+
+    async function checkHealth() {
+      state.healthChecked = true;
+      setStatusEl('正在检查 AI 服务状态…', 'info');
+      try {
+        const h = await aiApi.health();
+        if (!h.available) {
+          state.healthOk = false;
+          state.healthReason = h.reason || 'AI 服务不可用';
+          setStatusEl(state.healthReason, 'error');
+          if (els.aiBtnSend) els.aiBtnSend.disabled = true;
+          return;
+        }
+        state.healthOk = true;
+        setStatusEl('AI 已就绪 · provider=' + h.provider, 'ok');
+      } catch (e) {
+        state.healthOk = false;
+        state.healthReason = '健康检查失败：' + (e && e.message ? e.message : e);
+        setStatusEl(state.healthReason, 'error');
+        if (els.aiBtnSend) els.aiBtnSend.disabled = true;
+      }
+    }
+
+    function renderPlaceholderModels() {
+      if (state.placeholderRendered) return;
+      state.placeholderRendered = true;
+      // 会话还没建之前 SDK 拉不到列表，先放一个 Auto 占位
+      els.aiModelSelect.innerHTML = '<option value="">Auto (CLI 默认)</option>';
+      els.aiModelSelect.value = state.selectedModel || '';
+      els.aiModelSelect.disabled = false;
+    }
+
+    /**
+     * 从 SDK 拉真实模型列表，回填到下拉。
+     *
+     * 后端用一个独立的"探测会话"专门拉模型，所以**不需要等用户会话建立**，
+     * 打开面板时就能调。失败时维持占位的 Auto 列表。
+     */
+    async function loadRealModels() {
+      if (state.realModelsLoaded || state.loadingRealModels) return;
+      state.loadingRealModels = true;
+      try {
+        const res = await aiApi.listModels();
+        if (!res || !res.ok || !Array.isArray(res.models)) {
+          // 不刷新下拉，保留 Auto 占位
+          return;
+        }
+        const models = res.models;
+        // 头部固定一个 Auto，便于用户"恢复 CLI 默认"
+        const all = [{ modelId: '', name: 'Auto (CLI 默认)' }, ...models];
+        els.aiModelSelect.innerHTML = '';
+        for (const m of all) {
+          const opt = document.createElement('option');
+          opt.value = m.modelId || '';
+          opt.title = m.description || '';
+          opt.textContent = m.name || m.modelId || '(unnamed)';
+          els.aiModelSelect.appendChild(opt);
+        }
+        state.realModelsLoaded = true;
+        if (!state.defaultModelApplied) {
+          state.defaultModelApplied = true;
+          const preferred = findPreferredModelId(models, PREF_HINT);
+          if (preferred && preferred !== state.selectedModel) {
+            state.selectedModel = preferred;
+            // 偏好命中：静默对下一轮生效，不弹状态条免打扰
+            aiApi.setModel(preferred).catch(() => {});
+          }
+        }
+        els.aiModelSelect.value = state.selectedModel || '';
+      } finally {
+        state.loadingRealModels = false;
+      }
+    }
+
+    function findPreferredModelId(models, hint) {
+      const norm = (s) => String(s || '').toLowerCase().replace(/[\s\-_.]/g, '');
+      const target = norm(hint);
+      if (!target) return '';
+      for (const m of models) {
+        if (!m.modelId) continue;
+        if (norm(m.modelId).includes(target) || norm(m.name).includes(target)) {
+          return m.modelId;
+        }
+      }
+      return '';
+    }
+
+    async function onModelChange() {
+      const next = els.aiModelSelect.value || '';
+      if (next === state.selectedModel) return;
+      state.selectedModel = next;
+      if (!state.sessionReady) return; // 没建会话：留到 ensureSession 时随 body 一起传
+      try {
+        const res = await aiApi.setModel(next);
+        if (!res || !res.ok) {
+          setStatusEl('切换模型失败：' + ((res && res.error) || '未知错误'), 'error');
+          return;
+        }
+        setStatusEl(next ? `已切换到 ${next} · 下一轮生效` : '已恢复 CLI 默认 · 下一轮生效', 'ok');
+      } catch (e) {
+        setStatusEl('切换模型失败：' + (e && e.message ? e.message : e), 'error');
+      }
+    }
+
+    /** 把当前 buffer 序列化成 dump 文本，给后端写入 current.log */
+    function snapshotBufferAsText() {
+      if (!buffer || buffer.length === 0) return '';
+      const parts = [];
+      for (const line of buffer) {
+        parts.push(line.raw == null ? '' : String(line.raw));
+      }
+      return parts.join('\n') + '\n';
+    }
+
+    function buildContext() {
+      const meta = curMeta();
+      return {
+        platform: meta && meta.id ? meta.id : currentPlatform,
+        platformLabel: meta && meta.label ? meta.label : currentPlatform,
+        device: currentSerial || '',
+        packageName: (els.packageInput && els.packageInput.value) || '',
+        pid: currentPid || '',
+        levelFilter: els.levelFilter ? els.levelFilter.value : '',
+        tagFilter: els.tagFilter ? els.tagFilter.value : '',
+        keywords: keywords.slice(),
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    async function ensureSession() {
+      if (state.sessionReady) return true;
+      setStatusEl('正在准备日志快照与 AI 会话…', 'info');
+      const payload = {
+        initialLog: snapshotBufferAsText(),
+        context: buildContext(),
+        model: state.selectedModel || '',
+      };
+      const res = await aiApi.create(payload);
+      if (!res.ok) {
+        setStatusEl('创建会话失败：' + (res.error || '未知错误'), 'error');
+        return false;
+      }
+      state.sessionReady = true;
+      setStatusEl('会话已就绪，AI 通过 Read / Grep 自取日志。', 'ok');
+      // 会话刚建好就异步拉真实模型列表；不阻塞当前发送
+      void loadRealModels();
+      return true;
+    }
+
+    async function resetSession() {
+      try { await aiApi.close(); } catch (_) { /* ignore */ }
+      state.sessionReady = false;
+      state.sending = false;
+      state.currentAssistant = null;
+      // 模型列表已经缓存到主进程（1h TTL），不必重拉
+      // realModelsLoaded 保持原状即可，避免重置后再触发一次 probe CLI 启动开销
+      if (els.aiBtnSend) els.aiBtnSend.disabled = !state.healthOk;
+      if (els.aiBtnStop) els.aiBtnStop.hidden = true;
+      els.aiMessages.innerHTML = `
+        <div class="ai-empty">
+          <p>把当前日志缓冲交给 AI 帮你分析。</p>
+          <p class="ai-empty-hint">AI 不会一次性吃整段日志，而是用 Read / Grep 工具按需检索。第一次发送时会自动把当前缓冲快照下来作为"日志文件"。</p>
+        </div>
+      `;
+      setStatusEl('已重置会话，下次发送会重新建立。', 'info');
+    }
+
+    async function onSend() {
+      if (!state.healthOk) {
+        setStatusEl(state.healthReason || 'AI 服务不可用', 'error');
+        return;
+      }
+      if (state.sending) return;
+      const text = (els.aiInput.value || '').trim();
+      if (!text) return;
+      els.aiInput.value = '';
+      autoResizeAi();
+      appendUserBubble(text);
+      state.sending = true;
+      state.currentAssistant = null;
+      if (els.aiBtnSend) els.aiBtnSend.disabled = true;
+      if (els.aiBtnStop) els.aiBtnStop.hidden = false;
+      setStatusEl('AI 思考中…', 'info');
+      try {
+        const ok = await ensureSession();
+        if (!ok) {
+          state.sending = false;
+          if (els.aiBtnSend) els.aiBtnSend.disabled = false;
+          if (els.aiBtnStop) els.aiBtnStop.hidden = true;
+          return;
+        }
+        const res = await aiApi.send(text);
+        if (!res.ok) {
+          appendErrorBubble(res.error || '发送失败');
+          setStatusEl(res.error || '发送失败', 'error');
+          state.sending = false;
+          if (els.aiBtnSend) els.aiBtnSend.disabled = false;
+          if (els.aiBtnStop) els.aiBtnStop.hidden = true;
+        }
+        // 真正完成由 onEvent 收到 'done' 触发
+      } catch (e) {
+        appendErrorBubble(e && e.message ? e.message : String(e));
+        setStatusEl('异常：' + (e && e.message ? e.message : e), 'error');
+        state.sending = false;
+        if (els.aiBtnSend) els.aiBtnSend.disabled = false;
+        if (els.aiBtnStop) els.aiBtnStop.hidden = true;
+      }
+    }
+
+    async function onStop() {
+      try { await aiApi.interrupt(); } catch (_) { /* ignore */ }
+      setStatusEl('已请求中断', 'info');
+    }
+
+    // ===== SSE 事件渲染 =====
+    function handleAiEvent(ev) {
+      if (!ev || typeof ev.type !== 'string') return;
+      switch (ev.type) {
+        case 'turn_start':
+          state.currentAssistant = appendAssistantBubble();
+          break;
+        case 'text_delta':
+          ensureAssistant().appendText(String(ev.text || ''));
+          break;
+        case 'thinking':
+          ensureAssistant().appendThinking(String(ev.text || ''));
+          break;
+        case 'tool_use':
+          ensureAssistant().appendToolUse(String(ev.id), String(ev.name), ev.input);
+          break;
+        case 'tool_result':
+          ensureAssistant().appendToolResult(String(ev.id), String(ev.content || ''), !!ev.isError);
+          break;
+        case 'turn_end': {
+          const dur = Number(ev.durationMs || 0);
+          if (ev.success) setStatusEl(`完成 · ${fmtMs(dur)}`, 'ok');
+          else {
+            const errs = Array.isArray(ev.errors) ? ev.errors.join('; ') : '';
+            setStatusEl('执行失败' + (errs ? '：' + errs : ''), 'error');
+          }
+          break;
+        }
+        case 'error':
+          appendErrorBubble(String(ev.message || '未知错误'));
+          setStatusEl(String(ev.message || '错误'), 'error');
+          break;
+        case 'done':
+          state.sending = false;
+          state.currentAssistant = null;
+          if (els.aiBtnSend) els.aiBtnSend.disabled = false;
+          if (els.aiBtnStop) els.aiBtnStop.hidden = true;
+          break;
+        default:
+          break;
+      }
+    }
+
+    function ensureAssistant() {
+      if (!state.currentAssistant) {
+        state.currentAssistant = appendAssistantBubble();
+      }
+      const m = state.currentAssistant;
+      return {
+        appendText(t) {
+          if (!t) return;
+          if (!m.textEl) {
+            m.textEl = document.createElement('div');
+            m.textEl.className = 'ai-bubble-text';
+            m.bubble.appendChild(m.textEl);
+          }
+          m.textEl.appendChild(document.createTextNode(t));
+          scrollAiToBottom();
+        },
+        appendThinking(t) {
+          if (!t) return;
+          if (!m.thinkingBody) {
+            const det = document.createElement('details');
+            det.className = 'ai-thinking';
+            const sum = document.createElement('summary');
+            sum.textContent = '💭 推理过程';
+            const body = document.createElement('div');
+            body.className = 'ai-thinking-body';
+            det.appendChild(sum);
+            det.appendChild(body);
+            m.bubble.appendChild(det);
+            m.thinkingBody = body;
+          }
+          m.thinkingBody.appendChild(document.createTextNode(t));
+          scrollAiToBottom();
+        },
+        appendToolUse(id, name, input) {
+          if (!m.tools) m.tools = new Map();
+          const det = document.createElement('details');
+          det.className = 'ai-tool';
+          det.open = true;
+          const sum = document.createElement('summary');
+          const label = document.createElement('span');
+          label.className = 'ai-tool-label';
+          label.textContent = '🔧 ' + name;
+          const status = document.createElement('span');
+          status.className = 'ai-tool-status running';
+          status.textContent = '运行中…';
+          sum.appendChild(label);
+          sum.appendChild(status);
+          const body = document.createElement('div');
+          body.className = 'ai-tool-body';
+          const inputPre = document.createElement('pre');
+          inputPre.className = 'ai-tool-input';
+          inputPre.textContent = stringifyForDisplay(input);
+          body.appendChild(inputPre);
+          det.appendChild(sum);
+          det.appendChild(body);
+          m.bubble.appendChild(det);
+          m.tools.set(id, { node: det, body, statusEl: status });
+          // 新工具开始后，后续 text/thinking 落到新块里
+          m.textEl = null;
+          m.thinkingBody = null;
+          scrollAiToBottom();
+        },
+        appendToolResult(id, content, isError) {
+          if (!m.tools) m.tools = new Map();
+          const tool = m.tools.get(id);
+          const resultPre = document.createElement('pre');
+          resultPre.className = 'ai-tool-result' + (isError ? ' error' : '');
+          resultPre.textContent = truncateForDisplay(content);
+          if (!tool) {
+            m.bubble.appendChild(resultPre);
+          } else {
+            tool.body.appendChild(resultPre);
+            tool.statusEl.classList.remove('running');
+            tool.statusEl.classList.add(isError ? 'error' : 'ok');
+            tool.statusEl.textContent = isError ? '失败' : '完成';
+            tool.node.open = false;
+          }
+          scrollAiToBottom();
+        },
+      };
+    }
+
+    function appendUserBubble(text) {
+      clearAiEmpty();
+      const wrap = document.createElement('div');
+      wrap.className = 'ai-message user';
+      const bubble = document.createElement('div');
+      bubble.className = 'ai-bubble';
+      const t = document.createElement('div');
+      t.className = 'ai-bubble-text';
+      t.textContent = text;
+      bubble.appendChild(t);
+      wrap.appendChild(bubble);
+      els.aiMessages.appendChild(wrap);
+      scrollAiToBottom();
+    }
+
+    function appendAssistantBubble() {
+      clearAiEmpty();
+      const wrap = document.createElement('div');
+      wrap.className = 'ai-message assistant';
+      const bubble = document.createElement('div');
+      bubble.className = 'ai-bubble';
+      wrap.appendChild(bubble);
+      els.aiMessages.appendChild(wrap);
+      scrollAiToBottom();
+      return { bubble, textEl: null, thinkingBody: null, tools: new Map() };
+    }
+
+    function appendErrorBubble(msg) {
+      clearAiEmpty();
+      const wrap = document.createElement('div');
+      wrap.className = 'ai-message error';
+      const bubble = document.createElement('div');
+      bubble.className = 'ai-bubble';
+      bubble.textContent = msg;
+      wrap.appendChild(bubble);
+      els.aiMessages.appendChild(wrap);
+      scrollAiToBottom();
+    }
+
+    function clearAiEmpty() {
+      const empty = els.aiMessages.querySelector('.ai-empty');
+      if (empty) empty.remove();
+    }
+
+    function scrollAiToBottom() {
+      requestAnimationFrame(() => {
+        if (!els.aiMessages) return;
+        els.aiMessages.scrollTop = els.aiMessages.scrollHeight;
+      });
+    }
+
+    function autoResizeAi() {
+      if (!els.aiInput) return;
+      els.aiInput.style.height = 'auto';
+      const max = 180;
+      els.aiInput.style.height = Math.min(max, els.aiInput.scrollHeight + 2) + 'px';
+    }
+
+    function stringifyForDisplay(v) {
+      if (v == null) return '';
+      if (typeof v === 'string') return v;
+      try {
+        const s = JSON.stringify(v, null, 2);
+        return s.length > 4000 ? s.slice(0, 4000) + `\n… (${s.length} chars total)` : s;
+      } catch (_) { return String(v); }
+    }
+    function truncateForDisplay(s, max) {
+      max = max || 8000;
+      if (!s) return '';
+      if (s.length <= max) return s;
+      return s.slice(0, max) + `\n… (truncated, total ${s.length} chars)`;
+    }
+    function fmtMs(ms) {
+      if (!Number.isFinite(ms) || ms <= 0) return '0 ms';
+      if (ms < 1000) return Math.round(ms) + ' ms';
+      const s = ms / 1000;
+      if (s < 60) return s.toFixed(s < 10 ? 2 : 1) + ' s';
+      const m = Math.floor(s / 60);
+      const rs = Math.round(s - m * 60);
+      return m + 'm ' + rs + 's';
+    }
+
+    // ===== 日志镜像：把渲染端的新原始行追加到后端 current.log =====
+    let mirrorQueue = [];
+    let mirrorTimer = null;
+    function flushMirror() {
+      mirrorTimer = null;
+      if (!state.sessionReady) {
+        mirrorQueue.length = 0;
+        return;
+      }
+      if (mirrorQueue.length === 0) return;
+      const text = mirrorQueue.join('\n') + '\n';
+      mirrorQueue.length = 0;
+      aiApi.appendLog(text).catch(() => { /* swallow */ });
+    }
+    window.__aiMirror = {
+      push(lines) {
+        if (!state.sessionReady) return;
+        if (!Array.isArray(lines) || lines.length === 0) return;
+        for (const l of lines) {
+          if (l == null) continue;
+          mirrorQueue.push(String(l));
+        }
+        if (mirrorTimer == null) mirrorTimer = setTimeout(flushMirror, 250);
+      },
+    };
+
+    // ===== 事件绑定 =====
+    if (els.btnAi) els.btnAi.addEventListener('click', togglePanel);
+    if (els.aiBtnClose) els.aiBtnClose.addEventListener('click', closePanel);
+    if (els.aiBtnReset) els.aiBtnReset.addEventListener('click', () => void resetSession());
+    if (els.aiBtnSend) els.aiBtnSend.addEventListener('click', () => void onSend());
+    if (els.aiBtnStop) els.aiBtnStop.addEventListener('click', () => void onStop());
+    if (els.aiModelSelect) els.aiModelSelect.addEventListener('change', () => void onModelChange());
+    if (els.aiInput) {
+      els.aiInput.addEventListener('input', autoResizeAi);
+      els.aiInput.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+          e.preventDefault();
+          void onSend();
+        }
+      });
+    }
+
+    setupAiResizer();
+
+    // 监听主进程的 ai:event 流
+    aiApi.onEvent(handleAiEvent);
+
+    // 切平台时重置会话，避免新平台日志混在旧 dump 里造成误导
+    window.__aiOnSwitchPlatform = () => { void resetSession(); };
+
+    return { open: openPanel, close: closePanel };
+  }
+
   // ===== 启动 =====
   async function init() {
+    loadKeywordHistory();
     renderChips();
+    renderKeywordHistory();
     bindEvents();
     setRunButtons();
+    setupAiPanel();
 
     // 先拉平台列表填下拉，再按当前选中的平台执行后续检查
     try {

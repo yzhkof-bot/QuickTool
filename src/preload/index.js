@@ -70,6 +70,24 @@ contextBridge.exposeInMainWorld('quickTool', {
     },
   },
 
+  // AI 日志分析（codebuddy agent SDK）
+  ai: {
+    health: () => ipcRenderer.invoke('ai:health'),
+    create: (payload) => ipcRenderer.invoke('ai:create', payload),
+    appendLog: (chunk) => ipcRenderer.invoke('ai:appendLog', chunk),
+    send: (text) => ipcRenderer.invoke('ai:send', text),
+    interrupt: () => ipcRenderer.invoke('ai:interrupt'),
+    setModel: (model) => ipcRenderer.invoke('ai:setModel', model),
+    listModels: (opts) => ipcRenderer.invoke('ai:listModels', opts || {}),
+    close: () => ipcRenderer.invoke('ai:close'),
+    info: () => ipcRenderer.invoke('ai:info'),
+    onEvent: (cb) => {
+      const handler = (_e, ev) => cb(ev);
+      ipcRenderer.on('ai:event', handler);
+      return () => ipcRenderer.removeListener('ai:event', handler);
+    },
+  },
+
   // 真机文件浏览器（adb / hdc 路径设置复用日志工具）
   deviceFiles: {
     listPlatforms: () => ipcRenderer.invoke('deviceFiles:platforms'),

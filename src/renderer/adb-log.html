@@ -57,6 +57,8 @@
           <label>关键字</label>
           <div id="kwChips" class="chips-input">
             <input id="kwInput" type="text" placeholder="回车添加；以 ! 开头表示排除" autocomplete="off" />
+            <button id="kwHistoryBtn" class="kw-history-btn" type="button" title="选择历史关键字">历史</button>
+            <div id="kwHistoryPanel" class="kw-history-panel hidden"></div>
           </div>
         </div>
         <div class="field">
@@ -75,6 +77,7 @@
         <button id="btnSave" class="btn">💾 保存</button>
         <button id="btnImport" class="btn">📁 导入文件</button>
         <button id="btnSummary" class="btn">📊 摘要</button>
+        <button id="btnAi" class="btn ai-btn" title="打开 AI 分析助手">✦ AI 分析</button>
         <span class="spacer"></span>
         <span id="lineCount" class="muted">0 行</span>
       </div>
@@ -82,20 +85,63 @@
 
     <main class="adb-main">
       <div id="summaryPanel" class="summary-panel hidden"></div>
-      <div class="log-wrap">
-        <div id="searchBar" class="search-bar hidden">
-          <div class="sb-input-wrap">
-            <input id="sbInput" type="text" placeholder="搜索（当前缓冲区视图）…" autocomplete="off" spellcheck="false" />
-            <button id="sbCase" class="sb-toggle" title="区分大小写 (Alt+C)">Aa</button>
-            <button id="sbWord" class="sb-toggle" title="全字匹配 (Alt+W)">⟮ab⟯</button>
-            <button id="sbRegex" class="sb-toggle" title="正则 (Alt+R)">.*</button>
+      <div class="content-split">
+        <div class="log-wrap">
+          <div id="searchBar" class="search-bar hidden">
+            <div class="sb-input-wrap">
+              <input id="sbInput" type="text" placeholder="搜索（当前缓冲区视图）…" autocomplete="off" spellcheck="false" />
+              <button id="sbCase" class="sb-toggle" title="区分大小写 (Alt+C)">Aa</button>
+              <button id="sbWord" class="sb-toggle" title="全字匹配 (Alt+W)">⟮ab⟯</button>
+              <button id="sbRegex" class="sb-toggle" title="正则 (Alt+R)">.*</button>
+            </div>
+            <span id="sbCount" class="sb-count">无结果</span>
+            <button id="sbPrev" class="sb-btn" title="上一个 (Shift+Enter / Shift+F3)">▲</button>
+            <button id="sbNext" class="sb-btn" title="下一个 (Enter / F3)">▼</button>
+            <button id="sbClose" class="sb-btn" title="关闭 (Esc)">✕</button>
           </div>
-          <span id="sbCount" class="sb-count">无结果</span>
-          <button id="sbPrev" class="sb-btn" title="上一个 (Shift+Enter / Shift+F3)">▲</button>
-          <button id="sbNext" class="sb-btn" title="下一个 (Enter / F3)">▼</button>
-          <button id="sbClose" class="sb-btn" title="关闭 (Esc)">✕</button>
+          <div id="logArea" class="log-area"></div>
         </div>
-        <div id="logArea" class="log-area"></div>
+
+        <div id="aiResizer" class="ai-resizer collapsed" title="拖动调整 AI 面板宽度"></div>
+
+        <aside id="aiPanel" class="ai-panel collapsed">
+          <header class="ai-panel-header">
+            <div class="ai-panel-title">
+              <span class="ai-icon">✦</span>
+              <span>AI 日志分析</span>
+            </div>
+            <div class="ai-panel-tools">
+              <select id="aiModelSelect" class="ai-model-select" title="选择模型（下一轮生效）">
+                <option value="">模型加载中…</option>
+              </select>
+              <button id="aiBtnReset" class="ai-icon-btn" title="清空对话 / 重新建立会话">↻</button>
+              <button id="aiBtnClose" class="ai-icon-btn" title="收起面板">×</button>
+            </div>
+          </header>
+
+          <div id="aiStatus" class="ai-status" data-kind="info" hidden></div>
+
+          <section id="aiMessages" class="ai-messages">
+            <div class="ai-empty">
+              <p>把当前日志缓冲交给 AI 帮你分析。</p>
+              <p class="ai-empty-hint">AI 不会一次性吃整段日志，而是用 Read / Grep 工具按需检索。第一次发送时会自动把当前缓冲快照下来作为"日志文件"。</p>
+            </div>
+          </section>
+
+          <footer class="ai-input-row">
+            <textarea id="aiInput" class="ai-input" rows="3"
+              placeholder="例如：帮我找出最近的崩溃和它的根因；或者：MyTag 这条线在干嘛？"></textarea>
+            <div class="ai-input-actions">
+              <div class="ai-input-hint">
+                <kbd>Ctrl/Cmd+Enter</kbd> 发送
+              </div>
+              <div class="ai-input-buttons">
+                <button id="aiBtnStop" class="ai-stop" hidden>中断</button>
+                <button id="aiBtnSend" class="ai-send">发送</button>
+              </div>
+            </div>
+          </footer>
+        </aside>
       </div>
     </main>
 
