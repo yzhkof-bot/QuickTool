@@ -313,8 +313,7 @@ function registerIpc() {
   ipcMain.handle('log:clear', (_e, platformId, serial) => pf(platformId).clearBuffer(serial));
   ipcMain.handle('log:isRunning', (_e, platformId) => ({ running: pf(platformId).isStreaming() }));
 
-  ipcMain.handle('log:start', (_e, platformId, serial, options) => {
-    const opts = options || {};
+  ipcMain.handle('log:start', (_e, platformId, serial) => {
     // 切换平台时若另一个平台还在流，先停掉，避免两路日志混进同一队列
     for (const meta of logPlatforms.listMeta()) {
       if (meta.id !== platformId && pf(meta.id).isStreaming()) {
@@ -326,8 +325,6 @@ function registerIpc() {
 
     return pf(platformId).startStream({
       serial,
-      mode: opts.mode || 'realtime',
-      bundleName: opts.bundleName || '',
       onLines: (lines) => {
         // 平台切换或停止后到来的尾行直接丢弃，避免污染
         if (lineQueuePlatform !== platformId) return;
@@ -388,6 +385,49 @@ function registerIpc() {
       return { ok: true, path: filePath, content };
     } catch (e) {
       return { ok: false, error: e.message };
+    }
+  });
+
+  // ===== 王者（含 sgame）日志：列出沙箱 dcLog 文件 / 拉取选中文件并读入查看器 =====
+  ipcMain.handle('log:sgameLogs', (_e, platformId, serial, bundleName) => {
+    const p = pf(platformId);
+    if (typeof p.listSgameLogs !== 'function') {
+      return { ok: false, error: '当前平台不支持王者日志列表', files: [] };
+    }
+    return p.listSgameLogs(serial, bundleName);
+  });
+
+  ipcMain.handle('log:sgameLogContent', async (_e, platformId, serial, bundleName, fileName) => {
+    const p = pf(platformId);
+    if (typeof p.sgameLogRemotePath !== 'function' || typeof p.pullFile !== 'function') {
+      return { ok: false, error: '当前平台不支持王者日志载入' };
+    }
+    const remotePath = p.sgameLogRemotePath(fileName);
+    if (!remotePath) return { ok: false, error: '非法的日志文件名' };
+
+    const tempRoot = path.join(
+      app.getPath('temp'),
+      'QuickTool-sgame-logs',
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    const localPath = path.join(tempRoot, safeLocalName(fileName));
+    try {
+      await fs.promises.mkdir(tempRoot, { recursive: true });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+
+    const pulled = await p.pullFile(serial, remotePath, localPath, { bundleName });
+    if (!pulled.ok) return { ok: false, error: pulled.error || '拉取日志失败' };
+
+    try {
+      const content = await fs.promises.readFile(localPath, 'utf8');
+      return { ok: true, name: fileName, content };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    } finally {
+      // 读完即清理临时文件，避免堆积
+      fs.promises.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
     }
   });
 

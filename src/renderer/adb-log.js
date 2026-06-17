@@ -16,8 +16,12 @@
     btnDiag: $('btnDiag'),
     adbStatus: $('adbStatus'),
 
-    logModeField: $('logModeField'),
-    logModeSelect: $('logModeSelect'),
+    btnSgameLogs: $('btnSgameLogs'),
+    sgameModal: $('sgameModal'),
+    sgameDir: $('sgameDir'),
+    sgameList: $('sgameList'),
+    sgameRefresh: $('sgameRefresh'),
+    sgameClose: $('sgameClose'),
 
     packageInput: $('packageInput'),
     packageList: $('packageList'),
@@ -99,17 +103,14 @@
       || { id: currentPlatform, label: currentPlatform, binaryDisplay: currentPlatform, defaultLogFilePrefix: 'log' };
   }
 
-  // 当前日志来源模式：'realtime'（hilog/logcat）| 'normal'（鸿蒙王者类 dcLog 文件流）
-  function curLogMode() {
-    return els.logModeSelect ? els.logModeSelect.value : 'realtime';
+  // 检测到王者（包名含 sgame）且为鸿蒙平台时，显示「👑 王者日志」按钮
+  function isSgamePackage() {
+    return /sgame/i.test((els.packageInput.value || '').trim());
   }
-
-  // Normal 文件流目前只在鸿蒙下有意义，其它平台隐藏并强制回到实时模式
-  function updateLogModeVisibility() {
-    if (!els.logModeField || !els.logModeSelect) return;
-    const supportsNormal = currentPlatform === 'harmony';
-    els.logModeField.classList.toggle('hidden', !supportsNormal);
-    if (!supportsNormal) els.logModeSelect.value = 'realtime';
+  function updateSgameButtonVisibility() {
+    if (!els.btnSgameLogs) return;
+    const show = currentPlatform === 'harmony' && isSgamePackage();
+    els.btnSgameLogs.classList.toggle('hidden', !show);
   }
 
   // 关键字胶囊：每项是字符串，! 前缀表示排除
@@ -175,10 +176,10 @@
   const RE_THREADTIME = /^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEFAS])\s+(\S(?:.*?\S)?)\s*(?::\s?(.*))?$/;
 
   // sgame（王者）等应用的 Normal 文件日志格式：
-  //   2026-06-17 10:35:56:974 I     --jersay-  CFormPreloadManager.OnResourceLoaded: ...
-  // 即 "YYYY-MM-DD HH:MM:SS:mmm <Level> <message>"，时间用 4 位年份开头，
-  // 与 logcat/hilog 的 "MM-DD" 不冲突（threadtime 先匹配）。
-  const RE_DCLOG = /^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[:.]\d{3})\s+([A-Z])\s+(.*)$/;
+  //   2026-06-17 10:35:56:974 I\t[<color=yellow>sgame</color>][AutoTest]... frame:0 delta:0.334
+  // 即 "YYYY-MM-DD HH:MM:SS:mmm <Level>\t<message>"（也兼容 2 位年份 YY-MM-DD）。
+  // 日期含"年-月-日"三段，与 logcat/hilog 的 "MM-DD"（仅两段）不冲突，且 threadtime 先匹配。
+  const RE_DCLOG = /^((?:\d{4}|\d{2})-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[:.]\d{3})\s+([A-Z])\s+(.*)$/;
 
   /**
    * @typedef {Object} LogLine
@@ -192,13 +193,30 @@
    * @property {string} msg
    */
 
+  // sgame 多行条目的"当前级别"：遇到带时间戳的 dclog 行时记下级别，后续无时间戳的
+  // 续行（JSON 体、崩溃调用栈 #NN pc…、空格起始的补充行等）并入同一条目、继承级别。
+  // 遇到标准 logcat 行则清空（说明不在 sgame 上下文里）。
+  let parseDcLevel = null;
+  function resetParseState() { parseDcLevel = null; }
+
+  // 整行分隔符：sgame 用 ---- / **** 包裹崩溃栈等块
+  const RE_SEPARATOR = /^\s*(?:-{3,}|\*{3,})\s*$/;
+  // Unity 富文本标签（<color=..> <b> <size=..> 等），纯展示噪声，显示时去掉
+  const RE_RICHTEXT = /<\/?(?:color|b|i|size|material|quad)(?:=[^>]*)?>/gi;
+
+  function stripRichText(s) {
+    return String(s).replace(RE_RICHTEXT, '');
+  }
+
   function parseLine(raw) {
-    if (!raw) return null;
-    if (raw.startsWith('---------')) {
+    if (raw == null) return null;
+    if (RE_SEPARATOR.test(raw) || raw.startsWith('---------')) {
+      // 分隔符不打断 sgame 多行上下文（崩溃块里夹着 **** / ----）
       return { raw, kind: 'system', time: '', pid: '', tid: '', level: 'S', tag: '', msg: raw };
     }
     const m = raw.match(RE_THREADTIME);
     if (m) {
+      parseDcLevel = null;
       return {
         raw,
         kind: 'log',
@@ -212,15 +230,31 @@
     }
     const d = raw.match(RE_DCLOG);
     if (d) {
+      parseDcLevel = d[2];
       return {
         raw,
         kind: 'dclog',
+        cont: false,
         time: d[1],
         pid: '',
         tid: '',
         level: d[2],
         tag: '',
-        msg: d[3] == null ? '' : d[3],
+        msg: stripRichText(d[3] == null ? '' : d[3]),
+      };
+    }
+    // 无时间戳：处于 sgame 上下文时作为续行并入上一条，继承级别与样式
+    if (parseDcLevel != null) {
+      return {
+        raw,
+        kind: 'dclog',
+        cont: true,
+        time: '',
+        pid: '',
+        tid: '',
+        level: parseDcLevel,
+        tag: '',
+        msg: stripRichText(raw),
       };
     }
     return { raw, kind: 'unparsed', time: '', pid: '', tid: '', level: 'S', tag: '', msg: raw };
@@ -281,11 +315,15 @@
     // adb 自身的 stderr 永远可见（"device offline" 之类的关键提示，不要被静默掉）
     if (line.kind === 'stderr') return true;
 
-    // tag / pid / level 对标准 log 行和 sgame dclog 行生效
+    // 级别过滤对标准 log 行和 sgame dclog 行都生效
     if (line.kind === 'log' || line.kind === 'dclog') {
       const rank = LEVEL_RANK[line.level] ?? 0;
       if (rank < f.minLvl) return false;
+    }
 
+    // tag / pid 是 logcat/hilog 的概念，sgame 文件日志（dclog）没有 pid/tag，
+    // 不能用包名锁定的 PID 或 tag 过滤把整份王者日志全部滤掉。
+    if (line.kind === 'log') {
       if (f.tags.length) {
         const tagLower = line.tag.toLowerCase();
         const hit = f.tags.some((t) => tagLower.includes(t.toLowerCase()));
@@ -354,8 +392,16 @@
       if (f.kwIncludes.length) cls += ' hl-keyword';
     }
 
-    // sgame dclog 没有 pid/tid/tag，只渲染 时间 + 级别 + 正文，避免空列和多余的冒号
+    // sgame dclog 没有 pid/tid/tag，只渲染 时间 + 级别 + 正文，避免空列和多余的冒号；
+    // 续行（多行条目的后续物理行）缩进显示、继承级别底色，与首行成组。
     if (line.kind === 'dclog') {
+      if (line.cont) {
+        return (
+          `<div class="${cls} dclog-cont">` +
+          `<span class="log-msg">${msgHtml}</span>` +
+          `</div>`
+        );
+      }
       return (
         `<div class="${cls}">` +
         `<span class="log-time">${escapeHtml(line.time)}</span> ` +
@@ -717,6 +763,8 @@
     }
     currentSerial = els.deviceSelect.value;
     setStatus('idle', `已就绪 · ${devices.length} 个设备`);
+    // 设备就绪后自动拉取包名列表，省去手动点「获取包名」
+    if (currentSerial) loadPackages({ silent: true });
   }
 
   // ===== 诊断面板（同时适用 adb 和 hdc） =====
@@ -831,24 +879,26 @@
     await showDiag();
   }
 
-  async function loadPackages() {
+  // silent=true 用于选设备后自动加载，不弹「正在加载/已加载」提示，避免噪声
+  async function loadPackages({ silent = false } = {}) {
     if (!currentSerial) {
-      showToast('请先选择设备', 'error');
+      if (!silent) showToast('请先选择设备', 'error');
       return;
     }
-    showToast('正在加载包列表…');
+    if (!silent) showToast('正在加载包列表…');
     const res = await api.packages(currentPlatform, currentSerial);
     if (!res.ok) {
-      showToast('加载失败：' + (res.error || ''), 'error');
+      if (!silent) showToast('加载失败：' + (res.error || ''), 'error');
       return;
     }
     els.packageList.innerHTML = (res.packages || [])
       .map((p) => `<option value="${escapeHtml(p)}"></option>`)
       .join('');
-    showToast(`已加载 ${res.packages.length} 个包`, 'success');
+    if (!silent) showToast(`已加载 ${res.packages.length} 个包`, 'success');
   }
 
   async function lockPid() {
+    updateSgameButtonVisibility();
     const pkg = els.packageInput.value.trim();
     if (!pkg) {
       currentPid = '';
@@ -889,14 +939,9 @@
       showToast('请先选择设备', 'error');
       return;
     }
-    const mode = curLogMode();
-    const pkg = els.packageInput.value.trim();
-    if (mode === 'normal' && !pkg) {
-      showToast('Normal 文件流模式需要先填写包名（王者类应用包名含 sgame）', 'error', 3500);
-      return;
-    }
     setStatus('running', '启动中…');
-    const res = await api.start(currentPlatform, currentSerial, { mode, bundleName: pkg });
+    resetParseState();
+    const res = await api.start(currentPlatform, currentSerial);
     if (!res.ok) {
       setStatus('error', res.error || '启动失败');
       showToast('启动失败：' + (res.error || ''), 'error');
@@ -905,13 +950,8 @@
     isRunning = true;
     isPaused = false;
     setRunButtons();
-    if (mode === 'normal') {
-      setStatus('running', `Normal 文件流 · ${pkg} · ${currentSerial}`);
-      showToast(`已开始跟随最新 Normal 日志（${pkg}）`, 'success');
-    } else {
-      setStatus('running', `streaming · ${currentSerial}`);
-      showToast(`${curMeta().label} 日志已启动`, 'success');
-    }
+    setStatus('running', `streaming · ${currentSerial}`);
+    showToast(`${curMeta().label} 日志已启动`, 'success');
   }
 
   async function stopLogcat() {
@@ -951,6 +991,7 @@
     buffer.length = 0;
     renderedFromIdx = 0;
     visibleCount = 0;
+    resetParseState();
     els.logArea.innerHTML = '';
     if (searchState.open) {
       searchState.matches = [];
@@ -997,7 +1038,9 @@
     buffer.length = 0;
     renderedFromIdx = 0;
     pendingDuringPause = [];
-    const lines = String(content || '').split(/\r?\n/);
+    resetParseState();
+    // 去掉可能的 UTF-8 BOM，否则首行会因 \uFEFF 开头匹配不上而被当成「未解析」
+    const lines = String(content || '').replace(/^\uFEFF/, '').split(/\r?\n/);
     for (const raw of lines) {
       if (!raw) continue;
       const line = parseLine(raw);
@@ -1018,6 +1061,70 @@
       return;
     }
     await loadImportedContent(res.content, res.path);
+  }
+
+  // ===== 王者日志列表（选择后载入查看器） =====
+  function formatSize(bytes) {
+    const n = Number(bytes) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(2) + ' MB';
+  }
+
+  async function loadSgameLogList() {
+    if (!els.sgameList) return;
+    if (!currentSerial) {
+      els.sgameList.innerHTML = '<div class="sgame-empty err">请先选择设备</div>';
+      return;
+    }
+    const pkg = els.packageInput.value.trim();
+    if (!pkg) {
+      els.sgameList.innerHTML = '<div class="sgame-empty err">请先填写王者包名（含 sgame）</div>';
+      return;
+    }
+    els.sgameDir.textContent = '';
+    els.sgameList.innerHTML = '<div class="sgame-empty">正在读取王者日志列表…</div>';
+    const res = await api.sgameLogs(currentPlatform, currentSerial, pkg);
+    if (!res.ok) {
+      els.sgameList.innerHTML = `<div class="sgame-empty err">${escapeHtml(res.error || '读取失败')}</div>`;
+      return;
+    }
+    els.sgameDir.textContent = res.dir || '';
+    const files = res.files || [];
+    if (!files.length) {
+      els.sgameList.innerHTML = '<div class="sgame-empty">该目录下没有日志文件</div>';
+      return;
+    }
+    els.sgameList.innerHTML = files.map((f) => {
+      const meta = formatSize(f.size) + (f.modified ? ' · ' + f.modified : '');
+      return `<button class="sgame-item" data-name="${escapeHtml(f.name)}">` +
+        `<span class="sgame-item-name">${escapeHtml(f.name)}</span>` +
+        `<span class="sgame-item-meta">${escapeHtml(meta)}</span>` +
+        '</button>';
+    }).join('');
+  }
+
+  function openSgameModal() {
+    if (!els.sgameModal) return;
+    els.sgameModal.classList.remove('hidden');
+    loadSgameLogList();
+  }
+
+  function closeSgameModal() {
+    if (els.sgameModal) els.sgameModal.classList.add('hidden');
+  }
+
+  async function loadSgameLog(name) {
+    if (!name) return;
+    const pkg = els.packageInput.value.trim();
+    showToast(`正在拉取 ${name} …`);
+    const res = await api.sgameLogContent(currentPlatform, currentSerial, pkg, name);
+    if (!res.ok) {
+      showToast('载入失败：' + (res.error || ''), 'error', 3500);
+      return;
+    }
+    closeSgameModal();
+    await loadImportedContent(res.content, res.name || name);
   }
 
   function hasDraggedFiles(e) {
@@ -1158,24 +1265,36 @@
     });
     els.btnRefreshDevices.addEventListener('click', refreshDevices);
     els.btnDiag.addEventListener('click', () => showDiag());
-    if (els.logModeSelect) {
-      els.logModeSelect.addEventListener('change', () => {
-        if (curLogMode() === 'normal') {
-          showToast('Normal 文件流：开始后将持续跟随该包名沙箱 dcLog 下最新的 Normal_*.log', 'info', 3500);
-        }
-      });
-    }
     els.deviceSelect.addEventListener('change', () => {
       currentSerial = els.deviceSelect.value;
+      // 选中设备即自动拉取包名列表，无需再点「获取包名」
+      if (currentSerial) loadPackages({ silent: true });
     });
 
-    els.btnLoadPackages.addEventListener('click', loadPackages);
+    els.btnLoadPackages.addEventListener('click', () => loadPackages());
     els.btnLockPid.addEventListener('click', lockPid);
     els.packageInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') lockPid();
     });
     // 从下拉里选中包名（或编辑后失焦）即自动锁定 PID，无需再点 🎯
     els.packageInput.addEventListener('change', () => lockPid());
+    // 实时判断是否为王者包名，决定「👑 王者日志」按钮是否显示
+    els.packageInput.addEventListener('input', updateSgameButtonVisibility);
+
+    if (els.btnSgameLogs) els.btnSgameLogs.addEventListener('click', openSgameModal);
+    if (els.sgameClose) els.sgameClose.addEventListener('click', closeSgameModal);
+    if (els.sgameRefresh) els.sgameRefresh.addEventListener('click', loadSgameLogList);
+    if (els.sgameModal) {
+      els.sgameModal.addEventListener('click', (e) => {
+        if (e.target === els.sgameModal) closeSgameModal();
+      });
+    }
+    if (els.sgameList) {
+      els.sgameList.addEventListener('click', (e) => {
+        const item = e.target.closest('.sgame-item');
+        if (item) loadSgameLog(item.getAttribute('data-name') || '');
+      });
+    }
 
     const onFilterChange = () => {
       filterCache = null;
@@ -1386,14 +1505,16 @@
     currentPlatform = nextId;
     currentSerial = '';
     currentPid = '';
-    updateLogModeVisibility();
+    closeSgameModal();
     els.pidLabel.textContent = '';
     els.packageInput.value = '';
     els.packageList.innerHTML = '';
+    updateSgameButtonVisibility();
     els.deviceSelect.innerHTML = '';
     buffer.length = 0;
     renderedFromIdx = 0;
     visibleCount = 0;
+    resetParseState();
     els.logArea.innerHTML = '';
     // 旧平台残留的诊断 / 摘要面板属于上一个平台，先收起清空，避免出现
     // “选到鸿蒙却还显示 Android 诊断提示”这种串台情况。
@@ -2223,7 +2344,7 @@
       currentPlatform = platforms[0] ? platforms[0].id : 'android';
     }
     els.platformSelect.value = currentPlatform;
-    updateLogModeVisibility();
+    updateSgameButtonVisibility();
 
     setStatus('idle', `检查 ${curMeta().binaryDisplay}…`);
     const chk = await api.check(currentPlatform);

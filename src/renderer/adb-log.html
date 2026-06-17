@@ -23,14 +23,6 @@
           <span id="adbStatus" class="adb-status"></span>
         </div>
 
-        <div class="field hidden" id="logModeField">
-          <label>来源</label>
-          <select id="logModeSelect" class="sel" title="实时日志 / Normal 文件流（王者类应用沙箱 dcLog 下最新的 Normal_*.log）">
-            <option value="realtime">实时日志 (hilog)</option>
-            <option value="normal">Normal 文件流</option>
-          </select>
-        </div>
-
         <div class="field grow">
           <label>包名</label>
           <input id="packageInput" class="inp" type="text" list="packageList" placeholder="com.example.app（可选）" autocomplete="off" />
@@ -84,6 +76,7 @@
         <button id="btnClearDevice" class="btn" title="adb logcat -c">🗑 清设备缓存</button>
         <button id="btnSave" class="btn">💾 保存</button>
         <button id="btnImport" class="btn">📁 导入文件</button>
+        <button id="btnSgameLogs" class="btn hidden" title="选择并载入王者沙箱 dcLog 下的日志文件">👑 王者日志</button>
         <button id="btnSummary" class="btn">📊 摘要</button>
         <button id="btnAi" class="btn ai-btn" title="打开 AI 分析助手">✦ AI 分析</button>
         <span class="spacer"></span>
@@ -152,6 +145,18 @@
         </aside>
       </div>
     </main>
+
+    <div id="sgameModal" class="sgame-modal hidden">
+      <div class="sgame-dialog">
+        <header class="sgame-dialog-head">
+          <span class="sgame-dialog-title">👑 王者日志（点击载入）</span>
+          <button id="sgameRefresh" class="icon-btn" title="刷新列表">↻</button>
+          <button id="sgameClose" class="icon-btn" title="关闭">✕</button>
+        </header>
+        <div id="sgameDir" class="sgame-dir"></div>
+        <div id="sgameList" class="sgame-list"></div>
+      </div>
+    </div>
 
     <div id="toast" class="toast hidden"></div>
 

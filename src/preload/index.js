@@ -47,11 +47,17 @@ contextBridge.exposeInMainWorld('quickTool', {
     pidOf: (platformId, serial, pkg) => ipcRenderer.invoke('log:pid', platformId, serial, pkg),
     clear: (platformId, serial) => ipcRenderer.invoke('log:clear', platformId, serial),
     isRunning: (platformId) => ipcRenderer.invoke('log:isRunning', platformId),
-    start: (platformId, serial, options) => ipcRenderer.invoke('log:start', platformId, serial, options),
+    start: (platformId, serial) => ipcRenderer.invoke('log:start', platformId, serial),
     stop: (platformId) => ipcRenderer.invoke('log:stop', platformId),
 
     save: (platformId, content, defaultName) => ipcRenderer.invoke('log:save', platformId, content, defaultName),
     importFile: () => ipcRenderer.invoke('log:import'),
+
+    // 王者（含 sgame）日志：列目录 / 拉取选中文件内容
+    sgameLogs: (platformId, serial, bundleName) =>
+      ipcRenderer.invoke('log:sgameLogs', platformId, serial, bundleName),
+    sgameLogContent: (platformId, serial, bundleName, fileName) =>
+      ipcRenderer.invoke('log:sgameLogContent', platformId, serial, bundleName, fileName),
 
     onLines: (cb) => {
       const handler = (_e, payload) => cb(payload); // { platformId, lines }
