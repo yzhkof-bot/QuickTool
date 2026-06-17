@@ -16,8 +16,47 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const settings = require('./settings');
 
 const DEFAULT_MODEL_PREF = 'opus4.7';
+
+/** 需要透传给 SDK 子进程的 CodeBuddy 环境变量 */
+const CODEBUDDY_ENV_KEYS = [
+  'CODEBUDDY_API_KEY',
+  'CODEBUDDY_AUTH_TOKEN',
+  'CODEBUDDY_CODE_PATH',
+  'CODEBUDDY_INTERNET_ENVIRONMENT',
+];
+
+/**
+ * 组装 SDK 子进程环境变量。
+ * Electron 从桌面快捷方式启动时通常继承不到终端里的 export，
+ * 因此 iOA / 中国版必须在这里显式注入 CODEBUDDY_INTERNET_ENVIRONMENT。
+ */
+function buildSdkEnv() {
+  const env = {};
+  for (const k of CODEBUDDY_ENV_KEYS) {
+    if (process.env[k]) env[k] = process.env[k];
+  }
+  if (!env.CODEBUDDY_INTERNET_ENVIRONMENT) {
+    // 默认 ioa；可在 userData/settings.json 里用 codebuddyInternetEnvironment 覆盖
+    env.CODEBUDDY_INTERNET_ENVIRONMENT = settings.get('codebuddyInternetEnvironment', 'ioa');
+  }
+  return env;
+}
+
+/** Session 公共选项（cwd 由调用方指定） */
+function createBaseSdkOpts(cwd) {
+  return {
+    cwd,
+    env: buildSdkEnv(),
+    permissionMode: 'bypassPermissions',
+    canUseTool: async (_toolName, input) => ({
+      behavior: 'allow',
+      updatedInput: input,
+    }),
+  };
+}
 
 class AiLogChat {
   /**
@@ -41,13 +80,7 @@ class AiLogChat {
     this.streamAbort = false;
 
     const sdkOpts = {
-      cwd: this.workDir,
-      permissionMode: 'bypassPermissions',
-      // 所有工具一律放行；如果挂回调让用户确认，SDK 会一直等阻塞
-      canUseTool: async (_toolName, input) => ({
-        behavior: 'allow',
-        updatedInput: input,
-      }),
+      ...createBaseSdkOpts(this.workDir),
       systemPrompt: { append: buildSystemPrompt(this.context) },
       includePartialMessages: true,
     };
@@ -432,11 +465,7 @@ async function listModels(force = false) {
     }
     let probe = null;
     try {
-      probe = unstable_v2_createSession({
-        cwd: PROBE_DIR,
-        permissionMode: 'bypassPermissions',
-        canUseTool: async (_n, input) => ({ behavior: 'allow', updatedInput: input }),
-      });
+      probe = unstable_v2_createSession(createBaseSdkOpts(PROBE_DIR));
       await probe.connect();
       const raw = await probe.getAvailableModels();
       const list = Array.isArray(raw) ? raw.map((m) => ({
@@ -475,15 +504,21 @@ function health() {
   const hasEnvCreds =
     !!process.env.CODEBUDDY_API_KEY || !!process.env.CODEBUDDY_AUTH_TOKEN;
   const hasLoginDir = fs.existsSync(path.join(os.homedir(), '.codebuddy'));
+  const internetEnv = buildSdkEnv().CODEBUDDY_INTERNET_ENVIRONMENT || 'ioa';
   if (!hasEnvCreds && !hasLoginDir) {
     return {
       available: false,
       provider: 'codebuddy',
+      internetEnvironment: internetEnv,
       reason:
         '未检测到 CodeBuddy 登录态：请在终端跑 `codebuddy` 完成登录，或设置 CODEBUDDY_API_KEY 环境变量后重启 QuickTool。',
     };
   }
-  return { available: true, provider: 'codebuddy' };
+  return {
+    available: true,
+    provider: 'codebuddy',
+    internetEnvironment: internetEnv,
+  };
 }
 
 module.exports = {

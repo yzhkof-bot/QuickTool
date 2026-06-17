@@ -1858,7 +1858,8 @@
           return;
         }
         state.healthOk = true;
-        setStatusEl('AI 已就绪 · provider=' + h.provider, 'ok');
+        const envHint = h.internetEnvironment ? ` · env=${h.internetEnvironment}` : '';
+        setStatusEl('AI 已就绪 · provider=' + h.provider + envHint, 'ok');
       } catch (e) {
         state.healthOk = false;
         state.healthReason = '健康检查失败：' + (e && e.message ? e.message : e);
