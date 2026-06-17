@@ -23,6 +23,14 @@
           <span id="adbStatus" class="adb-status"></span>
         </div>
 
+        <div class="field hidden" id="logModeField">
+          <label>来源</label>
+          <select id="logModeSelect" class="sel" title="实时日志 / Normal 文件流（王者类应用沙箱 dcLog 下最新的 Normal_*.log）">
+            <option value="realtime">实时日志 (hilog)</option>
+            <option value="normal">Normal 文件流</option>
+          </select>
+        </div>
+
         <div class="field grow">
           <label>包名</label>
           <input id="packageInput" class="inp" type="text" list="packageList" placeholder="com.example.app（可选）" autocomplete="off" />

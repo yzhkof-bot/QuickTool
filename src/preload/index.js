@@ -47,7 +47,7 @@ contextBridge.exposeInMainWorld('quickTool', {
     pidOf: (platformId, serial, pkg) => ipcRenderer.invoke('log:pid', platformId, serial, pkg),
     clear: (platformId, serial) => ipcRenderer.invoke('log:clear', platformId, serial),
     isRunning: (platformId) => ipcRenderer.invoke('log:isRunning', platformId),
-    start: (platformId, serial) => ipcRenderer.invoke('log:start', platformId, serial),
+    start: (platformId, serial, options) => ipcRenderer.invoke('log:start', platformId, serial, options),
     stop: (platformId) => ipcRenderer.invoke('log:stop', platformId),
 
     save: (platformId, content, defaultName) => ipcRenderer.invoke('log:save', platformId, content, defaultName),

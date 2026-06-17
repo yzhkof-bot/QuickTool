@@ -313,7 +313,8 @@ function registerIpc() {
   ipcMain.handle('log:clear', (_e, platformId, serial) => pf(platformId).clearBuffer(serial));
   ipcMain.handle('log:isRunning', (_e, platformId) => ({ running: pf(platformId).isStreaming() }));
 
-  ipcMain.handle('log:start', (_e, platformId, serial) => {
+  ipcMain.handle('log:start', (_e, platformId, serial, options) => {
+    const opts = options || {};
     // 切换平台时若另一个平台还在流，先停掉，避免两路日志混进同一队列
     for (const meta of logPlatforms.listMeta()) {
       if (meta.id !== platformId && pf(meta.id).isStreaming()) {
@@ -325,6 +326,8 @@ function registerIpc() {
 
     return pf(platformId).startStream({
       serial,
+      mode: opts.mode || 'realtime',
+      bundleName: opts.bundleName || '',
       onLines: (lines) => {
         // 平台切换或停止后到来的尾行直接丢弃，避免污染
         if (lineQueuePlatform !== platformId) return;

@@ -16,6 +16,9 @@
     btnDiag: $('btnDiag'),
     adbStatus: $('adbStatus'),
 
+    logModeField: $('logModeField'),
+    logModeSelect: $('logModeSelect'),
+
     packageInput: $('packageInput'),
     packageList: $('packageList'),
     btnLoadPackages: $('btnLoadPackages'),
@@ -74,7 +77,7 @@
   // ===== 状态 =====
   const MAX_BUFFER = 50000;     // 内存最多保留的解析行
   const MAX_DOM = 5000;         // DOM 最多渲染的可见行
-  const LEVEL_RANK = { V: 0, D: 1, I: 2, W: 3, E: 4, F: 5, A: 5, S: -1 };
+  const LEVEL_RANK = { V: 0, T: 1, D: 1, I: 2, W: 3, E: 4, F: 5, A: 5, S: -1 };
 
   /** @type {Array<LogLine>} 全部解析后的日志行 */
   const buffer = [];
@@ -94,6 +97,19 @@
   function curMeta() {
     return platforms.find((p) => p.id === currentPlatform)
       || { id: currentPlatform, label: currentPlatform, binaryDisplay: currentPlatform, defaultLogFilePrefix: 'log' };
+  }
+
+  // 当前日志来源模式：'realtime'（hilog/logcat）| 'normal'（鸿蒙王者类 dcLog 文件流）
+  function curLogMode() {
+    return els.logModeSelect ? els.logModeSelect.value : 'realtime';
+  }
+
+  // Normal 文件流目前只在鸿蒙下有意义，其它平台隐藏并强制回到实时模式
+  function updateLogModeVisibility() {
+    if (!els.logModeField || !els.logModeSelect) return;
+    const supportsNormal = currentPlatform === 'harmony';
+    els.logModeField.classList.toggle('hidden', !supportsNormal);
+    if (!supportsNormal) els.logModeSelect.value = 'realtime';
   }
 
   // 关键字胶囊：每项是字符串，! 前缀表示排除
@@ -158,6 +174,12 @@
   //   4) tag 中含空格或对齐空格 "Foo Bar  : msg"
   const RE_THREADTIME = /^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEFAS])\s+(\S(?:.*?\S)?)\s*(?::\s?(.*))?$/;
 
+  // sgame（王者）等应用的 Normal 文件日志格式：
+  //   2026-06-17 10:35:56:974 I     --jersay-  CFormPreloadManager.OnResourceLoaded: ...
+  // 即 "YYYY-MM-DD HH:MM:SS:mmm <Level> <message>"，时间用 4 位年份开头，
+  // 与 logcat/hilog 的 "MM-DD" 不冲突（threadtime 先匹配）。
+  const RE_DCLOG = /^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[:.]\d{3})\s+([A-Z])\s+(.*)$/;
+
   /**
    * @typedef {Object} LogLine
    * @property {string} raw
@@ -176,19 +198,32 @@
       return { raw, kind: 'system', time: '', pid: '', tid: '', level: 'S', tag: '', msg: raw };
     }
     const m = raw.match(RE_THREADTIME);
-    if (!m) {
-      return { raw, kind: 'unparsed', time: '', pid: '', tid: '', level: 'S', tag: '', msg: raw };
+    if (m) {
+      return {
+        raw,
+        kind: 'log',
+        time: m[1],
+        pid: m[2],
+        tid: m[3],
+        level: m[4],
+        tag: (m[5] || '').trim(),
+        msg: m[6] == null ? '' : m[6],
+      };
     }
-    return {
-      raw,
-      kind: 'log',
-      time: m[1],
-      pid: m[2],
-      tid: m[3],
-      level: m[4],
-      tag: (m[5] || '').trim(),
-      msg: m[6] == null ? '' : m[6],
-    };
+    const d = raw.match(RE_DCLOG);
+    if (d) {
+      return {
+        raw,
+        kind: 'dclog',
+        time: d[1],
+        pid: '',
+        tid: '',
+        level: d[2],
+        tag: '',
+        msg: d[3] == null ? '' : d[3],
+      };
+    }
+    return { raw, kind: 'unparsed', time: '', pid: '', tid: '', level: 'S', tag: '', msg: raw };
   }
 
   // ===== 过滤 =====
@@ -246,8 +281,8 @@
     // adb 自身的 stderr 永远可见（"device offline" 之类的关键提示，不要被静默掉）
     if (line.kind === 'stderr') return true;
 
-    // tag / pid / level 仅对解析成功的标准 log 行生效
-    if (line.kind === 'log') {
+    // tag / pid / level 对标准 log 行和 sgame dclog 行生效
+    if (line.kind === 'log' || line.kind === 'dclog') {
       const rank = LEVEL_RANK[line.level] ?? 0;
       if (rank < f.minLvl) return false;
 
@@ -266,7 +301,9 @@
       : (f.kwIncludes.length > 0 || f.kwExcludes.length > 0);
 
     if (hasKeyword) {
-      const target = line.kind === 'log' ? (line.tag + ' ' + line.msg) : line.raw;
+      const target = (line.kind === 'log' || line.kind === 'dclog')
+        ? (line.tag + ' ' + line.msg)
+        : line.raw;
       if (f.useRegex) {
         if (f.regexIncludes.length && !f.regexIncludes.every((re) => re.test(target))) return false;
         if (f.regexExcludes.length && f.regexExcludes.some((re) => re.test(target))) return false;
@@ -282,7 +319,7 @@
 
   // ===== 智能高亮 =====
   function detectHighlight(line) {
-    if (line.kind !== 'log') return '';
+    if (line.kind !== 'log' && line.kind !== 'dclog') return '';
     const tag = line.tag;
     const msg = line.msg;
     if (line.level === 'F') return 'hl-crash';
@@ -302,7 +339,7 @@
     else cls += ' lvl-' + line.level;
     if (hl) cls += ' ' + hl;
 
-    if (line.kind !== 'log') {
+    if (line.kind !== 'log' && line.kind !== 'dclog') {
       return `<div class="${cls}">${escapeHtml(line.raw)}</div>`;
     }
 
@@ -315,6 +352,17 @@
         msgHtml = msgHtml.replace(re, '<mark>$1</mark>');
       }
       if (f.kwIncludes.length) cls += ' hl-keyword';
+    }
+
+    // sgame dclog 没有 pid/tid/tag，只渲染 时间 + 级别 + 正文，避免空列和多余的冒号
+    if (line.kind === 'dclog') {
+      return (
+        `<div class="${cls}">` +
+        `<span class="log-time">${escapeHtml(line.time)}</span> ` +
+        `<span class="lvl ${line.level}">${escapeHtml(line.level)}</span> ` +
+        `<span class="log-msg">${msgHtml}</span>` +
+        `</div>`
+      );
     }
 
     return (
@@ -841,8 +889,14 @@
       showToast('请先选择设备', 'error');
       return;
     }
+    const mode = curLogMode();
+    const pkg = els.packageInput.value.trim();
+    if (mode === 'normal' && !pkg) {
+      showToast('Normal 文件流模式需要先填写包名（王者类应用包名含 sgame）', 'error', 3500);
+      return;
+    }
     setStatus('running', '启动中…');
-    const res = await api.start(currentPlatform, currentSerial);
+    const res = await api.start(currentPlatform, currentSerial, { mode, bundleName: pkg });
     if (!res.ok) {
       setStatus('error', res.error || '启动失败');
       showToast('启动失败：' + (res.error || ''), 'error');
@@ -851,8 +905,13 @@
     isRunning = true;
     isPaused = false;
     setRunButtons();
-    setStatus('running', `streaming · ${currentSerial}`);
-    showToast(`${curMeta().label} 日志已启动`, 'success');
+    if (mode === 'normal') {
+      setStatus('running', `Normal 文件流 · ${pkg} · ${currentSerial}`);
+      showToast(`已开始跟随最新 Normal 日志（${pkg}）`, 'success');
+    } else {
+      setStatus('running', `streaming · ${currentSerial}`);
+      showToast(`${curMeta().label} 日志已启动`, 'success');
+    }
   }
 
   async function stopLogcat() {
@@ -1099,6 +1158,13 @@
     });
     els.btnRefreshDevices.addEventListener('click', refreshDevices);
     els.btnDiag.addEventListener('click', () => showDiag());
+    if (els.logModeSelect) {
+      els.logModeSelect.addEventListener('change', () => {
+        if (curLogMode() === 'normal') {
+          showToast('Normal 文件流：开始后将持续跟随该包名沙箱 dcLog 下最新的 Normal_*.log', 'info', 3500);
+        }
+      });
+    }
     els.deviceSelect.addEventListener('change', () => {
       currentSerial = els.deviceSelect.value;
     });
@@ -1108,6 +1174,8 @@
     els.packageInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') lockPid();
     });
+    // 从下拉里选中包名（或编辑后失焦）即自动锁定 PID，无需再点 🎯
+    els.packageInput.addEventListener('change', () => lockPid());
 
     const onFilterChange = () => {
       filterCache = null;
@@ -1318,6 +1386,7 @@
     currentPlatform = nextId;
     currentSerial = '';
     currentPid = '';
+    updateLogModeVisibility();
     els.pidLabel.textContent = '';
     els.packageInput.value = '';
     els.packageList.innerHTML = '';
@@ -2154,6 +2223,7 @@
       currentPlatform = platforms[0] ? platforms[0].id : 'android';
     }
     els.platformSelect.value = currentPlatform;
+    updateLogModeVisibility();
 
     setStatus('idle', `检查 ${curMeta().binaryDisplay}…`);
     const chk = await api.check(currentPlatform);

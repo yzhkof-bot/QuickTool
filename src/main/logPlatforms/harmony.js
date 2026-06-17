@@ -8,6 +8,12 @@ const ID = 'harmony';
 const SETTING_KEY = 'hdcPath';
 const BIN_NAME = 'hdc';
 
+// 王者（包名含 sgame）等应用把业务日志写在沙箱里的 dcLog 目录，文件名形如
+// Normal_20260615_171339_2985.log。这里走 hdc 沙箱（-b bundle），对应真机全局
+// 路径 /data/app/el2/100/base/<bundle>/haps/entry/files/dcLog。
+const NORMAL_LOG_DIR = 'data/storage/el2/base/haps/entry/files/dcLog';
+const NORMAL_FILE_RE = /^Normal_.*\.log$/i;
+
 const META = Object.freeze({
   id: ID,
   label: 'HarmonyOS (hdc)',
@@ -24,9 +30,142 @@ const META = Object.freeze({
   hint: '常见位置：DevEco Studio 的 sdk\\hmscore\\<ver>\\toolchains\\hdc.exe，或独立 command-line-tools 的 toolchains 目录。',
 });
 
-const runner = createProcessRunner(() => resolveBinary(SETTING_KEY, BIN_NAME));
+const hilogRunner = createProcessRunner(() => resolveBinary(SETTING_KEY, BIN_NAME));
 
 function getBin() { return resolveBinary(SETTING_KEY, BIN_NAME); }
+
+// ===== Normal 文件流：持续跟随沙箱 dcLog 下最新的 Normal_*.log =====
+// 设计：每隔 1s 轮询一次目录，挑出（按文件名时间戳）最新的 Normal 日志，并用
+// `tail -c +<offset+1>` 按字节偏移把"上次读到现在"的新增内容读出来。
+// 不用 `tail -f`：沙箱里 inotify 监听会被 SELinux 拒（Permission denied），
+// 而按字节偏移轮询读取走的是普通文件读，应用对自己的文件有读权限。
+// 应用滚动出新文件（文件名变化）时，把残留行刷出、从新文件头重新开始。
+function createNormalLogStreamer() {
+  let running = false;
+  let stopped = true;
+  let serial = '';
+  let bundleName = '';
+  let currentFile = '';
+  let offset = 0;          // 已读取的字节数（设备端文件内的偏移）
+  let lineBuffer = '';     // 跨轮询累积的半行
+  let pollTimer = null;
+  let reading = false;     // 防止上一轮 exec 未结束又叠一轮
+  let cbLines = null;
+  let cbStderr = null;
+  let warnedEmpty = false;
+  const POLL_MS = 1000;
+
+  function emitStderr(text) {
+    if (cbStderr) cbStderr(text);
+  }
+
+  function emitLines(lines) {
+    if (lines.length && cbLines) cbLines(lines);
+  }
+
+  function flushBuffer() {
+    if (lineBuffer) {
+      emitLines([lineBuffer]);
+      lineBuffer = '';
+    }
+  }
+
+  function feed(chunk) {
+    const text = lineBuffer + chunk;
+    const parts = text.split(/\r?\n/);
+    lineBuffer = parts.pop() || '';
+    emitLines(parts.filter((l) => l.length > 0));
+  }
+
+  async function findLatest() {
+    const { stdout } = await exec(getBin(),
+      ['-t', serial, 'shell', '-b', bundleName, 'ls', NORMAL_LOG_DIR]);
+    const files = stdout
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter((f) => NORMAL_FILE_RE.test(f));
+    if (!files.length) return '';
+    files.sort(); // 文件名内嵌时间戳，字典序即时间序
+    return files[files.length - 1];
+  }
+
+  // 读取 currentFile 从 offset 起的新增内容（按字节偏移，避免重复/漏读）
+  async function readNew() {
+    const full = NORMAL_LOG_DIR + '/' + currentFile;
+    const { stdout } = await exec(getBin(),
+      ['-t', serial, 'shell', '-b', bundleName, 'tail', '-c', '+' + (offset + 1), full],
+      { timeout: 20000 });
+    if (!stdout) return;
+    offset += Buffer.byteLength(stdout, 'utf8');
+    feed(stdout);
+  }
+
+  async function poll() {
+    if (stopped) return;
+    if (!reading) {
+      reading = true;
+      try {
+        const latest = await findLatest();
+        if (!latest) {
+          if (!currentFile && !warnedEmpty) {
+            warnedEmpty = true;
+            emitStderr(`(${NORMAL_LOG_DIR} 下暂无 Normal_*.log，等待生成…)\n`);
+          }
+        } else {
+          if (latest !== currentFile) {
+            // 切到更新的文件：把上一份残留行刷出，从新文件头开始
+            flushBuffer();
+            currentFile = latest;
+            offset = 0;
+            warnedEmpty = false;
+            emitStderr(`>>> 正在跟随最新 Normal 日志：${currentFile}\n`);
+          }
+          await readNew();
+        }
+      } catch (e) {
+        emitStderr('读取 Normal 日志失败：' + (e.message || e) + '\n');
+      } finally {
+        reading = false;
+      }
+    }
+    if (!stopped) pollTimer = setTimeout(poll, POLL_MS);
+  }
+
+  function start(opts) {
+    if (running) return { ok: false, error: '已在运行，请先停止' };
+    serial = opts.serial;
+    bundleName = opts.bundleName;
+    cbLines = opts.onLines;
+    cbStderr = opts.onStderr;
+    running = true;
+    stopped = false;
+    currentFile = '';
+    offset = 0;
+    lineBuffer = '';
+    warnedEmpty = false;
+    reading = false;
+    void poll();
+    return { ok: true };
+  }
+
+  function stop() {
+    if (!running && stopped) return { ok: true, alreadyStopped: true };
+    stopped = true;
+    running = false;
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    flushBuffer();
+    currentFile = '';
+    offset = 0;
+    lineBuffer = '';
+    return { ok: true };
+  }
+
+  function isRunning() { return running; }
+
+  return { start, stop, isRunning };
+}
+
+const normalStreamer = createNormalLogStreamer();
 
 async function check() {
   try {
@@ -148,18 +287,29 @@ async function clearBuffer(serial) {
   }
 }
 
-function isStreaming() { return runner.isRunning(); }
+function isStreaming() { return hilogRunner.isRunning() || normalStreamer.isRunning(); }
 
-function startStream({ serial, onLines, onStderr, onExit }) {
+function startStream({ serial, mode, bundleName, onLines, onStderr, onExit }) {
   if (!serial) return { ok: false, error: '未选择设备' };
+  // Normal 文件流：跟随王者（含 sgame）等应用沙箱 dcLog 下最新的 Normal_*.log
+  if (mode === 'normal') {
+    const bn = String(bundleName || '').trim();
+    if (!bn) {
+      return { ok: false, error: 'Normal 文件流模式需要先填写包名（王者类应用包名含 sgame）' };
+    }
+    return normalStreamer.start({ serial, bundleName: bn, onLines, onStderr, onExit });
+  }
   // hilog 默认就是流式输出；不指定 -L 默认输出全部级别
-  return runner.start({
+  return hilogRunner.start({
     args: ['-t', serial, 'shell', 'hilog'],
     onLines, onStderr, onExit,
   });
 }
 
-function stopStream() { return runner.stop(); }
+function stopStream() {
+  normalStreamer.stop();
+  return hilogRunner.stop();
+}
 
 async function diagnose() {
   const fromPath = await whichTool(BIN_NAME);
