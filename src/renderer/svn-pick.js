@@ -29,6 +29,11 @@
     logEmpty: $('logEmpty'),
     selectedChips: $('selectedChips'),
     output: $('output'),
+    detailModal: $('detailModal'),
+    detailTitle: $('detailTitle'),
+    detailSubtitle: $('detailSubtitle'),
+    detailBody: $('detailBody'),
+    btnCloseDetail: $('btnCloseDetail'),
     commitMsg: $('commitMsg'),
     footerText: $('footerText'),
     busyText: $('busyText'),
@@ -167,6 +172,7 @@
           <td class="author-cell">${escapeHtml(e.author)}</td>
           <td class="date-cell">${escapeHtml(shortDate(e.date))}</td>
           <td class="msg-cell" title="${escapeHtml(e.msg)}">${escapeHtml(firstLine)}</td>
+          <td class="act-col"><button type="button" class="detail-btn" data-detail="${e.revision}" title="查看该提交的详细改动">改动</button></td>
         </tr>`;
     }).join('');
 
@@ -543,8 +549,451 @@
     }
   }
 
+  // ===== 改动详情弹窗 =====
+  const detail = {
+    source: '', revision: 0, repoRoot: '', paths: [], selectedPath: '',
+    token: 0,
+    cache: new Map(),    // repoPath -> fileDiff 结果（已取到）
+    inflight: new Map(), // repoPath -> 正在进行的请求 Promise（去重）
+  };
+
+  // 取单个文件 diff：命中缓存直接返回；在途请求复用；否则发起并缓存
+  function getFileDiff(repoPath) {
+    if (detail.cache.has(repoPath)) return Promise.resolve(detail.cache.get(repoPath));
+    if (detail.inflight.has(repoPath)) return detail.inflight.get(repoPath);
+    const entry = detail.paths.find((p) => p.path === repoPath);
+    const token = detail.token;
+    const promise = api.fileDiff({
+      repoRoot: detail.repoRoot,
+      repoPath,
+      revision: detail.revision,
+      action: entry ? entry.action : '',
+    }).then((res) => {
+      if (detail.token === token) detail.cache.set(repoPath, res);
+      detail.inflight.delete(repoPath);
+      return res;
+    }).catch((err) => {
+      detail.inflight.delete(repoPath);
+      throw err;
+    });
+    detail.inflight.set(repoPath, promise);
+    return promise;
+  }
+
+  // 后台并发预取本次 revision 所有文件的 diff，切换时即可秒开
+  async function prefetchAllDiffs() {
+    const token = detail.token;
+    const files = detail.paths.filter((p) => p.kind !== 'dir');
+    let idx = 0;
+    const CONCURRENCY = 4;
+    const worker = async () => {
+      while (idx < files.length) {
+        if (detail.token !== token) return; // 弹窗已切换/关闭
+        const p = files[idx++];
+        if (detail.cache.has(p.path) || detail.inflight.has(p.path)) continue;
+        try { await getFileDiff(p.path); } catch (_) { /* 单个失败不影响其它 */ }
+      }
+    };
+    const n = Math.min(CONCURRENCY, files.length);
+    await Promise.all(Array.from({ length: n }, worker));
+  }
+
+  // 把文本切成行（去掉末尾空行造成的多余空项）
+  function splitLines(t) {
+    if (t === '' || t == null) return [];
+    const arr = String(t).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    if (arr.length > 1 && arr[arr.length - 1] === '') arr.pop();
+    return arr;
+  }
+
+  function diffRow(o, n, cls, sign, code) {
+    return `<div class="dl ${cls}">`
+      + `<span class="dl-no old">${o === '' ? '' : o}</span>`
+      + `<span class="dl-no new">${n === '' ? '' : n}</span>`
+      + `<span class="dl-sign">${sign}</span>`
+      + `<span class="dl-code">${escapeHtml(code)}</span>`
+      + `</div>`;
+  }
+
+  // 折叠区暂存：foldId -> 该折叠隐藏的所有行 HTML（点击展开时用）
+  const foldStore = new Map();
+  let foldSeq = 0;
+  const DIFF_CONTEXT = 3; // 改动上下保留的上下文行数
+
+  // 纯 LCS（middle 段用，可能 O(n*m)）
+  function lcsOps(a, b) {
+    const n = a.length;
+    const m = b.length;
+    const W = m + 1;
+    const dp = new Uint32Array((n + 1) * W);
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i * W + j] = a[i] === b[j]
+          ? dp[(i + 1) * W + (j + 1)] + 1
+          : Math.max(dp[(i + 1) * W + j], dp[i * W + (j + 1)]);
+      }
+    }
+    const ops = [];
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { ops.push({ t: 'ctx', s: a[i] }); i++; j++; }
+      else if (dp[(i + 1) * W + j] >= dp[i * W + (j + 1)]) { ops.push({ t: 'del', s: a[i] }); i++; }
+      else { ops.push({ t: 'add', s: b[j] }); j++; }
+    }
+    while (i < n) ops.push({ t: 'del', s: a[i++] });
+    while (j < m) ops.push({ t: 'add', s: b[j++] });
+    return ops;
+  }
+
+  // 逐行比对：先剥离公共前后缀（典型改动 middle 很小），中段再做 LCS；
+  // 不再有总行数上限。只有当“完全不同的中段”超大时才退化成整块替换，避免内存爆炸。
+  function diffLinesSmart(a, b) {
+    const n = a.length;
+    const m = b.length;
+    let p = 0;
+    while (p < n && p < m && a[p] === b[p]) p++;
+    let s = 0;
+    while (s < n - p && s < m - p && a[n - 1 - s] === b[m - 1 - s]) s++;
+
+    const midA = a.slice(p, n - s);
+    const midB = b.slice(p, m - s);
+    let midOps;
+    if (midA.length === 0 && midB.length === 0) midOps = [];
+    else if (midA.length === 0) midOps = midB.map((x) => ({ t: 'add', s: x }));
+    else if (midB.length === 0) midOps = midA.map((x) => ({ t: 'del', s: x }));
+    else if (midA.length * midB.length > 8000000) {
+      midOps = [...midA.map((x) => ({ t: 'del', s: x })), ...midB.map((x) => ({ t: 'add', s: x }))];
+    } else {
+      midOps = lcsOps(midA, midB);
+    }
+
+    const ops = [];
+    for (let i = 0; i < p; i++) ops.push({ t: 'ctx', s: a[i] });
+    for (const o of midOps) ops.push(o);
+    for (let i = n - s; i < n; i++) ops.push({ t: 'ctx', s: a[i] });
+    return ops;
+  }
+
+  // 把若干行对象渲染成带折叠的 diff（gap=true 的连续行折叠成「展开 N 行」）
+  function renderLineList(lines) {
+    if (!lines.length) return '<div class="detail-loading">（无差异）</div>';
+    const signOf = (cls) => (cls === 'add' ? '+' : cls === 'del' ? '-' : '');
+    const rowOf = (l) => diffRow(l.o, l.n, l.cls, signOf(l.cls), l.code);
+    let html = '';
+    let i = 0;
+    while (i < lines.length) {
+      if (!lines[i].gap) { html += rowOf(lines[i]); i++; continue; }
+      let j = i;
+      while (j < lines.length && lines[j].gap) j++;
+      const hidden = lines.slice(i, j);
+      const id = 'fold' + (foldSeq++);
+      foldStore.set(id, hidden.map(rowOf).join(''));
+      html += `<div class="diff-fold" data-fold="${id}"><span class="diff-fold-icon">⋯</span> 展开 ${hidden.length} 行未改动</div>`;
+      i = j;
+    }
+    return `<div class="diff-view">${html}</div>`;
+  }
+
+  // 用 svn 自己的 unified diff + 新版本全文，重建出整文件视图（hunk 之间未改动段标为可折叠 gap）
+  function reconstructFromSvnDiff(diffText, newText) {
+    const newLines = splitLines(newText);
+    const raw = String(diffText || '').split(/\r?\n/);
+    const hunks = [];
+    let cur = null;
+    for (const ln of raw) {
+      if (/^Index: /.test(ln) || /^={3,}$/.test(ln) || /^--- /.test(ln) || /^\+\+\+ /.test(ln)) continue;
+      const h = ln.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (h) { cur = { oldStart: Number(h[1]), newStart: Number(h[2]), body: [] }; hunks.push(cur); continue; }
+      if (!cur) continue;
+      if (ln.startsWith('\\')) continue; // \ No newline at end of file
+      cur.body.push(ln);
+    }
+
+    const out = [];
+    let newPos = 1;
+    let oldPos = 1;
+    for (const hunk of hunks) {
+      while (newPos < hunk.newStart) {
+        out.push({ cls: 'ctx', o: oldPos, n: newPos, code: newLines[newPos - 1] || '', gap: true });
+        newPos++; oldPos++;
+      }
+      for (const bl of hunk.body) {
+        const c = bl[0];
+        const text = bl.slice(1);
+        if (c === '+') { out.push({ cls: 'add', o: '', n: newPos, code: text }); newPos++; }
+        else if (c === '-') { out.push({ cls: 'del', o: oldPos, n: '', code: text }); oldPos++; }
+        else { out.push({ cls: 'ctx', o: oldPos, n: newPos, code: text }); oldPos++; newPos++; }
+      }
+    }
+    while (newPos <= newLines.length) {
+      out.push({ cls: 'ctx', o: oldPos, n: newPos, code: newLines[newPos - 1] || '', gap: true });
+      newPos++; oldPos++;
+    }
+    return out;
+  }
+
+  // 渲染 cat 比对结果（兜底）：改动周围保留上下文，长段未改动折叠成「展开 N 行」
+  function renderTextDiff(oldText, newText) {
+    const a = splitLines(oldText);
+    const b = splitLines(newText);
+    const ops = diffLinesSmart(a, b);
+    if (!ops.length) return '<div class="detail-loading">（两个版本内容相同）</div>';
+
+    // 1) 给每行编号
+    const lines = [];
+    let oldNo = 1;
+    let newNo = 1;
+    for (const op of ops) {
+      if (op.t === 'add') { lines.push({ cls: 'add', sign: '+', o: '', n: newNo, code: op.s }); newNo++; }
+      else if (op.t === 'del') { lines.push({ cls: 'del', sign: '-', o: oldNo, n: '', code: op.s }); oldNo++; }
+      else { lines.push({ cls: 'ctx', sign: '', o: oldNo, n: newNo, code: op.s }); oldNo++; newNo++; }
+    }
+
+    // 2) 标记需要保留显示的行（改动行 + 其上下 DIFF_CONTEXT 行）
+    const hasChange = lines.some((l) => l.cls !== 'ctx');
+    const keep = new Array(lines.length).fill(!hasChange); // 整文件无改动则全部显示
+    if (hasChange) {
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].cls !== 'ctx') {
+          const from = Math.max(0, i - DIFF_CONTEXT);
+          const to = Math.min(lines.length - 1, i + DIFF_CONTEXT);
+          for (let k = from; k <= to; k++) keep[k] = true;
+        }
+      }
+    }
+
+    // 3) 输出：保留行直接渲染；连续被折叠的行收进一个可展开的 fold
+    const rowOf = (l) => diffRow(l.o, l.n, l.cls, l.sign, l.code);
+    let html = '';
+    let i = 0;
+    while (i < lines.length) {
+      if (keep[i]) { html += rowOf(lines[i]); i++; continue; }
+      let j = i;
+      while (j < lines.length && !keep[j]) j++;
+      const hidden = lines.slice(i, j);
+      const id = 'fold' + (foldSeq++);
+      foldStore.set(id, hidden.map(rowOf).join(''));
+      html += `<div class="diff-fold" data-fold="${id}"><span class="diff-fold-icon">⋯</span> 展开 ${hidden.length} 行未改动</div>`;
+      i = j;
+    }
+    return `<div class="diff-view">${html}</div>`;
+  }
+
+  function closeDetail() {
+    els.detailModal.classList.add('hidden');
+    detail.token += 1; // 让后台预取停止
+  }
+
+  function fileBaseName(p) {
+    return String(p || '').split('/').filter(Boolean).pop() || p;
+  }
+
+  function fmtSize(n) {
+    if (n == null) return '—';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(2) + ' MB';
+  }
+
+  // 二进制文件：展示轻量元信息对比
+  function renderBinaryInfo(res) {
+    const actLabel = { A: '新增', M: '修改', D: '删除', R: '替换' }[res.action] || res.action || '改动';
+
+    let sizeVal;
+    if (res.action === 'A') sizeVal = fmtSize(res.newSize);
+    else if (res.action === 'D') sizeVal = fmtSize(res.oldSize);
+    else {
+      const delta = (res.oldSize != null && res.newSize != null) ? res.newSize - res.oldSize : null;
+      const deltaStr = delta == null ? '' : ` <span class="${delta >= 0 ? 'up' : 'down'}">(${delta >= 0 ? '+' : '-'}${fmtSize(Math.abs(delta))})</span>`;
+      sizeVal = `${fmtSize(res.oldSize)} → ${fmtSize(res.newSize)}${deltaStr}`;
+    }
+
+    let md5Val;
+    if (res.action === 'A') md5Val = `<code>${escapeHtml(res.newMd5 || '—')}</code>`;
+    else if (res.action === 'D') md5Val = `<code>${escapeHtml(res.oldMd5 || '—')}</code>`;
+    else {
+      const changed = res.oldMd5 && res.newMd5 && res.oldMd5 !== res.newMd5;
+      md5Val = `<code>${escapeHtml(res.oldMd5 || '—')}</code><br><code>${escapeHtml(res.newMd5 || '—')}</code>`
+        + `<div class="bin-md5-note ${changed ? 'changed' : ''}">${changed ? '内容已变化' : '内容未变化'}</div>`;
+    }
+
+    return `
+      <div class="bin-info">
+        <div class="bin-title">二进制文件，无法逐行对比，仅显示元信息</div>
+        <table class="bin-table">
+          <tr><th>操作</th><td>${escapeHtml(actLabel)}</td></tr>
+          <tr><th>MIME</th><td>${escapeHtml(res.mimeType || '（未设置）')}</td></tr>
+          <tr><th>大小</th><td>${sizeVal}</td></tr>
+          <tr><th>MD5</th><td>${md5Val}</td></tr>
+        </table>
+      </div>`;
+  }
+
+  function renderDiffResult(pane, res) {
+    if (!res || !res.ok) {
+      pane.innerHTML = `<div class="detail-loading">获取失败：${escapeHtml((res && res.error) || '未知错误')}</div>`;
+      return;
+    }
+    if (res.mode === 'binary') {
+      pane.innerHTML = renderBinaryInfo(res);
+      return;
+    }
+    foldStore.clear();
+    if (res.mode === 'text-js') {
+      pane.innerHTML = renderTextDiff(res.oldText, res.newText);
+    } else if (!res.diff || !res.diff.trim()) {
+      pane.innerHTML = '<div class="detail-loading">（svn 未报告文本差异，可能仅属性改动）</div>';
+    } else {
+      pane.innerHTML = renderLineList(reconstructFromSvnDiff(res.diff, res.newText));
+    }
+    pane.scrollTop = 0;
+  }
+
+  async function selectDetailFile(repoPath) {
+    detail.selectedPath = repoPath;
+    els.detailBody.querySelectorAll('.path-row').forEach((el) => {
+      el.classList.toggle('selected', el.getAttribute('data-path') === repoPath);
+    });
+    const pane = els.detailBody.querySelector('#detailDiffPane');
+    if (!pane) return;
+
+    const entry = detail.paths.find((p) => p.path === repoPath);
+    if (entry && entry.kind === 'dir') {
+      pane.innerHTML = '<div class="detail-loading">目录改动没有文本 diff</div>';
+      return;
+    }
+
+    // 命中缓存：直接渲染，不闪 loading
+    if (detail.cache.has(repoPath)) {
+      renderDiffResult(pane, detail.cache.get(repoPath));
+      return;
+    }
+
+    pane.innerHTML = '<div class="detail-loading">正在获取该文件的 diff…</div>';
+    let res;
+    try {
+      res = await getFileDiff(repoPath);
+    } catch (e) {
+      if (detail.selectedPath === repoPath) {
+        pane.innerHTML = `<div class="detail-loading">获取失败：${escapeHtml(e.message)}</div>`;
+      }
+      return;
+    }
+    if (detail.selectedPath !== repoPath) return; // 期间又点了别的文件
+    renderDiffResult(pane, res);
+  }
+
+  async function openDetail(revision) {
+    const source = els.sourceInput.value.trim();
+    if (!source) { showToast('请先填写来源', 'error'); return; }
+    const entry = entries.find((e) => e.revision === revision);
+    els.detailTitle.textContent = `r${revision} 改动详情`;
+    els.detailSubtitle.textContent = entry ? `${entry.author} · ${shortDate(entry.date)}` : '';
+    els.detailBody.innerHTML = '<div class="detail-loading">正在获取改动…</div>';
+    els.detailModal.classList.remove('hidden');
+
+    let res;
+    try {
+      res = await api.revisionDetail(source, revision);
+    } catch (e) {
+      els.detailBody.innerHTML = `<div class="detail-loading">获取失败：${escapeHtml(e.message)}</div>`;
+      return;
+    }
+    if (!res || !res.ok) {
+      els.detailBody.innerHTML = `<div class="detail-loading">获取失败：${escapeHtml((res && res.error) || '未知错误')}</div>`;
+      return;
+    }
+
+    detail.source = source;
+    detail.revision = revision;
+    detail.repoRoot = res.repoRoot || '';
+    detail.paths = res.paths || [];
+    detail.selectedPath = '';
+    detail.token += 1;       // 使上一次 revision 的在途请求/预取作废
+    detail.cache = new Map();
+    detail.inflight = new Map();
+
+    const msgHtml = res.msg ? `<div class="detail-msg">${escapeHtml(res.msg)}</div>` : '';
+    const fileItems = detail.paths.length
+      ? detail.paths.map((p) =>
+          `<div class="path-row" data-path="${escapeHtml(p.path)}" title="${escapeHtml(p.path)}">
+             <span class="path-action ${escapeHtml(p.action)}">${escapeHtml(p.action)}</span>
+             <span class="path-text">${escapeHtml(fileBaseName(p.path))}</span>
+           </div>`,
+        ).join('')
+      : `<div class="detail-loading">${escapeHtml(res.pathsError || '（无改动文件）')}</div>`;
+
+    els.detailBody.innerHTML = `
+      ${msgHtml}
+      <div class="detail-split">
+        <div class="detail-files">
+          <div class="detail-section-title">改动文件（${detail.paths.length}）</div>
+          <div class="path-list">${fileItems}</div>
+        </div>
+        <div class="detail-diff-pane">
+          <div class="detail-section-title">Diff</div>
+          <div id="detailDiffPane" class="diff-pane"><div class="detail-loading">请选择左侧文件查看 diff</div></div>
+        </div>
+      </div>
+    `;
+
+    const firstFile = detail.paths.find((p) => p.kind !== 'dir') || detail.paths[0];
+    if (firstFile) selectDetailFile(firstFile.path);
+    // 后台并发预取其余文件的 diff，之后切换文件即可秒开
+    prefetchAllDiffs();
+  }
+
+  // ===== 拖拽目录到输入框 =====
+  function setupDropZone(input, onPath) {
+    const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+    input.addEventListener('dragenter', (e) => { stop(e); input.classList.add('drag-over'); });
+    input.addEventListener('dragover', (e) => {
+      stop(e);
+      e.dataTransfer.dropEffect = 'copy';
+      input.classList.add('drag-over');
+    });
+    input.addEventListener('dragleave', (e) => { stop(e); input.classList.remove('drag-over'); });
+    input.addEventListener('drop', (e) => {
+      stop(e);
+      input.classList.remove('drag-over');
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!file) return;
+      let p = '';
+      try {
+        p = api.getPathForFile ? api.getPathForFile(file) : (file.path || '');
+      } catch (_) {
+        p = file.path || '';
+      }
+      if (!p) { showToast('无法获取拖入路径', 'error'); return; }
+      input.value = p;
+      onPath(p);
+    });
+  }
+
   // ===== 事件绑定 =====
   function bindEvents() {
+    els.btnCloseDetail.addEventListener('click', closeDetail);
+    els.detailModal.addEventListener('click', (e) => {
+      if (e.target === els.detailModal) closeDetail();
+    });
+    els.detailBody.addEventListener('click', (e) => {
+      const fold = e.target.closest('.diff-fold[data-fold]');
+      if (fold) {
+        const rows = foldStore.get(fold.getAttribute('data-fold'));
+        if (rows != null) {
+          foldStore.delete(fold.getAttribute('data-fold'));
+          fold.outerHTML = rows;
+        }
+        return;
+      }
+      const row = e.target.closest('.path-row[data-path]');
+      if (row) selectDetailFile(row.getAttribute('data-path'));
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !els.detailModal.classList.contains('hidden')) closeDetail();
+    });
+
     els.btnDiag.addEventListener('click', toggleDiag);
     els.btnLoadLog.addEventListener('click', loadLog);
     els.sourceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadLog(); });
@@ -573,8 +1022,18 @@
     });
     els.targetInput.addEventListener('change', refreshTargetInfo);
 
+    // 拖拽目录到输入框
+    setupDropZone(els.sourceInput, () => { if (!commitMsgDirty) updateCommitMsg(); });
+    setupDropZone(els.targetInput, () => { refreshTargetInfo(); });
+
     // 行点击 / 勾选
     els.logRows.addEventListener('click', (e) => {
+      const detailBtn = e.target.closest('button[data-detail]');
+      if (detailBtn) {
+        e.stopPropagation();
+        openDetail(Number(detailBtn.getAttribute('data-detail')));
+        return;
+      }
       const cb = e.target.closest('input[type="checkbox"]');
       if (cb) {
         toggleRev(Number(cb.getAttribute('data-rev')), cb.checked);

@@ -1,5 +1,6 @@
 const { execFile } = require('child_process');
 const fs = require('fs');
+const crypto = require('crypto');
 const settings = require('./settings');
 
 const SETTING_KEY = 'svnPath';
@@ -173,6 +174,172 @@ async function log(source, { limit = 100, search = '', revisionRange = '' } = {}
     });
   }
   return { ok: true, entries, resolvedUrl };
+}
+
+// 查看单个 revision 的改动文件清单（svn log -v）+ 仓库根（用于拼接单文件 URL）
+async function revisionDetail(source, revision) {
+  if (!source) return { ok: false, error: '未指定来源' };
+  const rev = Number(revision);
+  if (!Number.isFinite(rev) || rev <= 0) return { ok: false, error: '非法 revision' };
+
+  let target = source;
+  if (!isUrl(source)) {
+    const resolved = await resolveSourceUrl(source);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    target = resolved.url;
+  }
+
+  // 仓库根：用于把 svn log -v 给出的仓库绝对路径拼成可 diff 的 URL
+  const inf = await info(target);
+  const repoRoot = inf.ok ? inf.repoRoot : '';
+
+  // 变更文件清单
+  const logRes = await run(['log', '-v', '--xml', '-r', String(rev), target], { timeout: 60000 });
+  const paths = [];
+  let author = '';
+  let date = '';
+  let msg = '';
+  if (logRes.ok) {
+    const entry = (logRes.stdout.match(/<logentry[\s\S]*?<\/logentry>/) || [''])[0];
+    author = pickTag(entry, 'author');
+    date = pickTag(entry, 'date');
+    msg = pickTag(entry, 'msg').trim();
+    const re = /<path\b([^>]*)>([\s\S]*?)<\/path>/g;
+    let m;
+    while ((m = re.exec(entry)) !== null) {
+      const attrs = m[1];
+      paths.push({
+        action: (attrs.match(/\baction="([^"]*)"/) || [])[1] || '',
+        kind: (attrs.match(/\bkind="([^"]*)"/) || [])[1] || '',
+        path: decodeXml(m[2]),
+      });
+    }
+    paths.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  return {
+    ok: true,
+    revision: rev,
+    author,
+    date,
+    msg,
+    repoRoot,
+    paths,
+    pathsError: logRes.ok ? '' : logRes.stderr,
+  };
+}
+
+// 以原始字节方式执行 svn（用于 svn cat，避免文本解码破坏二进制判断）
+function runBuf(args, { timeout = 180000 } = {}) {
+  const binary = resolveBinary();
+  return new Promise((resolve) => {
+    execFile(
+      binary,
+      args,
+      { windowsHide: true, encoding: 'buffer', maxBuffer: 256 * 1024 * 1024, timeout },
+      (err, stdout, stderr) => {
+        if (err) {
+          const msg = (stderr && stderr.toString('utf8').trim()) || err.message || `执行 ${binary} 失败`;
+          resolve({ ok: false, code: err.code, stderr: msg });
+          return;
+        }
+        resolve({ ok: true, buf: stdout || Buffer.alloc(0) });
+      },
+    );
+  });
+}
+
+// 二进制判定：参照 git——文件前 8000 字节内出现 NUL 字节即视为二进制
+function isBinaryBuffer(buf) {
+  if (!buf || !buf.length) return false;
+  const len = Math.min(buf.length, 8000);
+  for (let i = 0; i < len; i++) {
+    if (buf[i] === 0) return true;
+  }
+  return false;
+}
+
+function bufToText(buf) {
+  if (!buf || !buf.length) return '';
+  let t = buf.toString('utf8');
+  if (t.charCodeAt(0) === 0xFEFF) t = t.slice(1); // 去掉 BOM
+  return t;
+}
+
+// 查看单个文件在某 revision 的 diff。
+// - 先用 svn cat 取原始字节做二进制嗅探（NUL 字节），真二进制直接返回 binary；
+// - 文本用 svn 自己的 diff（加 --force，即便 svn:mime-type 把 .cs 等误标二进制也能出文本 diff），
+//   保证 diff 结果与 svn 一致、准确；
+// - 同时返回新版本全文，供渲染端展开被折叠的上下文。
+async function fileDiff({ repoRoot, repoPath, revision, action }) {
+  const rev = Number(revision);
+  if (!Number.isFinite(rev) || rev <= 0) return { ok: false, error: '非法 revision' };
+  if (!repoRoot || !repoPath) return { ok: false, error: '缺少文件 URL 信息' };
+
+  const fileUrl = String(repoRoot).replace(/\/+$/, '') + '/' + String(repoPath).replace(/^\/+/, '');
+  const N = rev;
+  const P = rev - 1;
+  const act = String(action || '').toUpperCase();
+
+  // 嗅探用的版本：改动/新增取新版 @N；删除取旧版 @(N-1)
+  let sniffBuf = null;
+  let newText = '';
+  let lastErr = '';
+  if (act !== 'D') {
+    const n = await runBuf(['cat', `${fileUrl}@${N}`]);
+    if (n.ok) { sniffBuf = n.buf; newText = bufToText(n.buf); } else lastErr = n.stderr || lastErr;
+  } else {
+    const o = await runBuf(['cat', `${fileUrl}@${P}`]);
+    if (o.ok) sniffBuf = o.buf; else lastErr = o.stderr || lastErr;
+  }
+
+  if (sniffBuf && isBinaryBuffer(sniffBuf)) {
+    // 二进制：补齐另一版本，给出轻量元信息对比（大小 / MD5 / mime-type）
+    const sniffIsNew = act !== 'D';
+    let newBuf = sniffIsNew ? sniffBuf : null;
+    let oldBuf = sniffIsNew ? null : sniffBuf;
+    if (act !== 'A' && oldBuf === null) {
+      let o = await runBuf(['cat', `${fileUrl}@${P}`]);
+      if (!o.ok) o = await runBuf(['cat', '-r', String(P), `${fileUrl}@${N}`]);
+      if (o.ok) oldBuf = o.buf;
+    }
+    if (act !== 'D' && newBuf === null) {
+      const n = await runBuf(['cat', `${fileUrl}@${N}`]);
+      if (n.ok) newBuf = n.buf;
+    }
+    const md5 = (b) => (b ? crypto.createHash('md5').update(b).digest('hex') : '');
+    const mimeRef = act !== 'D' ? `${fileUrl}@${N}` : `${fileUrl}@${P}`;
+    const mp = await run(['propget', 'svn:mime-type', mimeRef], { timeout: 30000 });
+    return {
+      ok: true,
+      mode: 'binary',
+      action: act,
+      oldSize: oldBuf ? oldBuf.length : null,
+      newSize: newBuf ? newBuf.length : null,
+      oldMd5: md5(oldBuf),
+      newMd5: md5(newBuf),
+      mimeType: mp.ok ? (mp.stdout || '').trim() : '',
+      fileUrl,
+    };
+  }
+
+  // 用 svn 自己的 diff（--force 跳过 mime-type 二进制限制）
+  const d = await run(['diff', '-c', String(N), '--force', fileUrl], { timeout: 180000 });
+  if (d.ok) {
+    return { ok: true, mode: 'text', action: act, diff: d.stdout, newText, fileUrl };
+  }
+
+  // 兜底：svn diff 失败时退回 cat 双版本本地比对
+  let oldText = '';
+  if (act !== 'A') {
+    let o = await runBuf(['cat', `${fileUrl}@${P}`]);
+    if (!o.ok) o = await runBuf(['cat', '-r', String(P), `${fileUrl}@${N}`]);
+    if (o.ok) oldText = bufToText(o.buf); else lastErr = o.stderr || lastErr;
+  }
+  if (!newText && !oldText) {
+    return { ok: false, error: lastErr || d.stderr || '无法获取文件内容', fileUrl };
+  }
+  return { ok: true, mode: 'text-js', action: act, oldText, newText, fileUrl };
 }
 
 // svn update 工作副本
@@ -368,6 +535,8 @@ module.exports = {
   getBinaryStatus,
   info,
   log,
+  revisionDetail,
+  fileDiff,
   update,
   merge,
   status,

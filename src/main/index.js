@@ -598,6 +598,8 @@ function registerIpc() {
 
   ipcMain.handle('svn:info', (_e, target) => svnPick.info(target));
   ipcMain.handle('svn:log', (_e, source, options) => svnPick.log(source, options || {}));
+  ipcMain.handle('svn:revisionDetail', (_e, source, revision) => svnPick.revisionDetail(source, revision));
+  ipcMain.handle('svn:fileDiff', (_e, payload) => svnPick.fileDiff(payload || {}));
   ipcMain.handle('svn:update', (_e, target) => svnPick.update(target));
   ipcMain.handle('svn:merge', (_e, payload) => svnPick.merge(payload || {}));
   ipcMain.handle('svn:status', (_e, target) => svnPick.status(target));

@@ -64,6 +64,7 @@
                 <th class="author-col">作者</th>
                 <th class="date-col">日期</th>
                 <th>提交信息</th>
+                <th class="act-col"></th>
               </tr>
             </thead>
             <tbody id="logRows"></tbody>
@@ -113,6 +114,19 @@
     </footer>
 
     <div id="toast" class="toast hidden"></div>
+
+    <div id="detailModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <div id="detailTitle" class="modal-title">改动详情</div>
+            <div id="detailSubtitle" class="modal-subtitle"></div>
+          </div>
+          <button id="btnCloseDetail" class="modal-close" type="button">✕</button>
+        </div>
+        <div id="detailBody" class="modal-body"></div>
+      </div>
+    </div>
 
     <script src="./svn-pick.js"></script>
   </body>
