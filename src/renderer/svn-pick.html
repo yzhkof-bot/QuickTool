@@ -36,7 +36,7 @@
         </div>
         <div class="field">
           <label>条数</label>
-          <input id="limitInput" class="inp limit-inp" type="number" min="1" max="2000" value="100" />
+          <input id="limitInput" class="inp limit-inp" type="number" min="0" value="100" title="留空或 0 表示拉取全部历史（可能较慢）" placeholder="全部" />
           <label>关键字</label>
           <input id="searchInput" class="inp search-inp" type="text" placeholder="提交信息 / revision" autocomplete="off" />
           <label>作者</label>
@@ -81,10 +81,13 @@
 
         <div class="op-section">
           <div class="op-title">操作流程</div>
+          <label class="op-check" title="勾选则合并前先 svn update 目标；取消则直接合并不更新">
+            <input id="chkUpdateBeforeMerge" type="checkbox" checked /> 合并前先更新目标
+          </label>
           <div class="op-actions">
             <button id="btnUpdate" class="btn" title="svn update 目标工作副本">① 更新目标</button>
             <button id="btnDryRun" class="btn" title="svn merge --dry-run 预演">② 预演合并</button>
-            <button id="btnMerge" class="btn primary" title="svn update + svn merge -c ... --ignore-ancestry">③ 更新并合并</button>
+            <button id="btnMerge" class="btn primary" title="svn merge -c ... --ignore-ancestry（按上方勾选决定是否先更新）">③ 合并</button>
           </div>
           <div class="op-actions">
             <button id="btnStatus" class="btn" title="svn status 查看本地改动">查看改动</button>

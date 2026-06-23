@@ -153,12 +153,15 @@ async function log(source, { limit = 100, search = '', revisionRange = '' } = {}
   } else {
     // 显式从 HEAD 往回取，保证能看到仓库最新提交
     args.push('-r', 'HEAD:1');
-    args.push('-l', String(Math.max(1, Math.min(2000, Number(limit) || 100))));
+    const lim = Math.floor(Number(limit));
+    // 条数 <= 0 视为不限制（拉取全部历史）；否则按指定条数
+    if (Number.isFinite(lim) && lim > 0) args.push('-l', String(lim));
   }
   if (search) args.push('--search', search);
   args.push(target);
 
-  const res = await run(args, { timeout: 60000 });
+  // 拉全部历史可能较慢，给足超时
+  const res = await run(args, { timeout: 600000 });
   if (!res.ok) return { ok: false, error: res.stderr, entries: [], resolvedUrl };
 
   const entries = [];

@@ -41,6 +41,7 @@
     btnUpdate: $('btnUpdate'),
     btnDryRun: $('btnDryRun'),
     btnMerge: $('btnMerge'),
+    chkUpdateBeforeMerge: $('chkUpdateBeforeMerge'),
     btnStatus: $('btnStatus'),
     btnDiff: $('btnDiff'),
     btnRevert: $('btnRevert'),
@@ -345,10 +346,11 @@
   async function loadLog() {
     const source = requireSource();
     if (!source) return;
-    setBusy(true, '加载日志…');
+    const raw = els.limitInput.value.trim();
+    const limit = raw === '' ? 0 : Math.max(0, Math.floor(Number(raw) || 0)); // 0 = 全部
+    setBusy(true, limit ? '加载日志…' : '加载全部历史…（可能较慢）');
     setFooter('svn log ' + source);
     try {
-      const limit = Number(els.limitInput.value) || 100;
       const res = await api.log(source, { limit });
       if (!res.ok) {
         showToast('加载日志失败', 'error', 3500);
@@ -400,9 +402,10 @@
       return;
     }
 
+    const updateFirst = !!els.chkUpdateBeforeMerge.checked;
     setBusy(true, dryRun ? '预演合并…' : '合并中…');
     try {
-      if (!dryRun) {
+      if (!dryRun && updateFirst) {
         setFooter('svn update');
         setOutput('$ svn update ' + target);
         const up = await api.update(target);
@@ -414,6 +417,7 @@
         }
       } else {
         setOutput('');
+        if (!dryRun) appendOutput('（已跳过 svn update）');
       }
 
       const res = await api.merge({ sourceUrl: source, revisions, target, dryRun });
