@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+    <title>QuickTool · SVN Cherry-pick</title>
+    <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./svn-pick.css" />
+  </head>
+  <body class="sp-body">
+    <header class="sp-toolbar">
+      <div class="sp-row">
+        <div class="field">
+          <label>SVN</label>
+          <span id="svnStatus" class="sp-status">检测中…</span>
+          <button id="btnDiag" class="icon-btn" title="诊断 svn 路径">ⓘ</button>
+        </div>
+        <div class="field grow">
+          <label>来源分支</label>
+          <input id="sourceInput" class="inp src-inp" type="text" list="sourceHistory"
+                 placeholder="来源分支 URL 或本地工作副本目录（如 https://svn.../branches/feature 或 D:\optmini）" autocomplete="off" spellcheck="false" />
+          <datalist id="sourceHistory"></datalist>
+          <button id="btnPickSourceDir" class="btn" title="选择本地工作副本目录作为来源">浏览…</button>
+          <button id="btnLoadLog" class="btn primary">加载来源日志</button>
+        </div>
+      </div>
+      <div class="sp-row">
+        <div class="field grow">
+          <label>目标副本</label>
+          <input id="targetInput" class="inp tgt-inp" type="text" list="targetHistory"
+                 placeholder="目标 SVN 工作副本目录（本地路径）" autocomplete="off" spellcheck="false" />
+          <datalist id="targetHistory"></datalist>
+          <button id="btnPickDir" class="btn">浏览…</button>
+          <span id="targetInfo" class="hint"></span>
+        </div>
+        <div class="field">
+          <label>条数</label>
+          <input id="limitInput" class="inp limit-inp" type="number" min="1" max="2000" value="100" />
+          <label>关键字</label>
+          <input id="searchInput" class="inp search-inp" type="text" placeholder="提交信息 / revision" autocomplete="off" />
+          <label>作者</label>
+          <select id="authorSelect" class="inp author-sel"><option value="">全部作者</option></select>
+          <button id="btnClearFilter" class="btn" title="清除关键字和作者过滤">清除</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="sp-main">
+      <aside id="diagPanel" class="diag-panel hidden"></aside>
+
+      <section class="log-panel">
+        <div class="log-head">
+          <span id="logCount" class="muted">未加载日志</span>
+          <span class="status-spacer"></span>
+          <label class="chk-all"><input id="selectAll" type="checkbox" /> 全选可见</label>
+        </div>
+        <div id="logWrap" class="log-table-wrap">
+          <table class="log-table">
+            <thead>
+              <tr>
+                <th class="chk-col"></th>
+                <th class="rev-col">Revision</th>
+                <th class="author-col">作者</th>
+                <th class="date-col">日期</th>
+                <th>提交信息</th>
+              </tr>
+            </thead>
+            <tbody id="logRows"></tbody>
+          </table>
+          <div id="logEmpty" class="sp-empty">输入来源分支后点击「加载日志」</div>
+        </div>
+      </section>
+
+      <section class="op-panel">
+        <div class="op-section">
+          <div class="op-title">已选 revision</div>
+          <div id="selectedChips" class="chips"><span class="muted">尚未选择</span></div>
+        </div>
+
+        <div class="op-section">
+          <div class="op-title">操作流程</div>
+          <div class="op-actions">
+            <button id="btnUpdate" class="btn" title="svn update 目标工作副本">① 更新目标</button>
+            <button id="btnDryRun" class="btn" title="svn merge --dry-run 预演">② 预演合并</button>
+            <button id="btnMerge" class="btn primary" title="svn update + svn merge -c ... --ignore-ancestry">③ 更新并合并</button>
+          </div>
+          <div class="op-actions">
+            <button id="btnStatus" class="btn" title="svn status 查看本地改动">查看改动</button>
+            <button id="btnDiff" class="btn" title="svn diff 查看 diff">查看 diff</button>
+            <button id="btnRevert" class="btn danger" title="svn revert -R 撤销所有未提交改动">撤销改动</button>
+            <button id="btnCleanup" class="btn" title="svn cleanup">cleanup</button>
+          </div>
+        </div>
+
+        <div class="op-section grow">
+          <div class="op-title">输出</div>
+          <pre id="output" class="op-output"></pre>
+        </div>
+
+        <div class="op-section commit-section">
+          <div class="op-title">④ 提交</div>
+          <textarea id="commitMsg" class="commit-msg" rows="2" placeholder="提交信息，例如 cherry-pick r12345 from feature"></textarea>
+          <button id="btnCommit" class="btn primary commit-btn">提交到 SVN</button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="footerText">就绪</span>
+      <span class="status-spacer"></span>
+      <span id="busyText"></span>
+    </footer>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="./svn-pick.js"></script>
+  </body>
+</html>

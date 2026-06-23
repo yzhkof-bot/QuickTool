@@ -110,6 +110,45 @@ npm start
 
 > HarmonyOS 普通真机不允许 `hdc` 像 Android 一样浏览整棵文件系统；应用沙箱浏览依赖 `hdc shell/file -b <bundleName>`，通常只对可调试应用有效。如果选择系统应用或非调试包，设备可能返回 `Invalid bundle name` / `Permission denied`。
 
+## SVN Cherry-pick 可视化
+
+把「`svn merge -c <rev> --ignore-ancestry` 跨分支拣选提交」做成可视化界面，让你能从一个 SVN 目录把某些 revision pick 到另一个 SVN 工作副本。打开方式：
+
+- 主窗口顶栏的 **⇄** 按钮
+- 系统托盘右键菜单的 **「SVN Cherry-pick」**
+
+**前置条件**：本机安装命令行 `svn`（TortoiseSVN 勾选 command line client tools，或 SlikSVN）。如果不在系统 `PATH`，点窗口左上角 **ⓘ 诊断** → **「📁 选择 svn 可执行文件…」** 手动指定一次，路径保存在 Electron `userData/settings.json`（键名 `svnPath`）。
+
+**对应的命令行流程**（界面只是把它图形化）：
+
+```powershell
+# 1. 更新目标工作副本
+svn update "目标目录"
+
+# 2. cherry-pick（--ignore-ancestry 跳过所有 tracking 检查）
+svn merge -c <revision号> --ignore-ancestry <来源分支URL> "目标目录"
+
+# 3. 确认无误后提交
+svn commit "目标目录" -m "cherry-pick r<revision号> from xxx"
+```
+
+**使用步骤**：
+
+1. **来源分支**：填要 pick 提交的来源分支 URL（`svn merge` 的来源）。点「从目标推断」可先填入目标当前分支 URL 再改成来源分支。
+2. **目标副本**：点「浏览…」选本地的目标 SVN 工作副本目录；下方会显示它当前的 `r版本 · URL`。
+3. 点 **「加载日志」**（`svn log --xml`）列出来源分支最近的提交，可用右上角输入框按 revision / 作者 / 信息关键字过滤。
+4. **勾选**要 pick 的一个或多个 revision（多选会合并成 `-c r1,r2,r3`）。
+5. 右侧操作区：
+   - **① 更新目标** = `svn update`
+   - **② 预演合并** = `svn merge --dry-run`（不改动工作副本，先看会动哪些文件 / 有无冲突）
+   - **③ 更新并合并** = 先 `svn update` 再 `svn merge -c ... --ignore-ancestry --accept postpone`
+   - **查看改动 / 查看 diff** = `svn status` / `svn diff`
+   - **撤销改动** = `svn revert -R`（合并后还没提交、想重来时用）
+   - **cleanup** = `svn cleanup`
+6. 确认无误后，在 **④ 提交** 区检查自动生成的提交信息（`cherry-pick r... from 来源名`，可改），点 **「提交到 SVN」** = `svn commit`。
+
+> 合并若出现冲突（输出里有 `C` 开头的行），界面会提示「存在冲突」。冲突需要你用编辑器 / TortoiseSVN 手动解决后再提交；本工具用 `--accept postpone` 不自动解决冲突，避免误操作。
+
 ## 项目结构
 
 ```
@@ -129,6 +168,8 @@ QuickTool/
     │   ├── settings.js       # 持久化配置（adb / hdc 路径等）
     │   ├── adbWindow.js      # 设备日志窗口（adb + hdc 共用）
     │   ├── deviceFilesWindow.js # 真机文件浏览器窗口（adb + hdc 共用）
+    │   ├── svnPick.js        # SVN 命令封装（log / update / merge / commit 等）
+    │   ├── svnPickWindow.js  # SVN Cherry-pick 窗口
     │   └── logPlatforms/     # 平台抽象层（共用 UI，分平台命令）
     │       ├── base.js       # execFile / spawn / 二进制查找等共用工具
     │       ├── android.js    # adb logcat 实现
@@ -145,7 +186,10 @@ QuickTool/
         ├── adb-log.js
         ├── device-files.html # 真机文件浏览器
         ├── device-files.css
-        └── device-files.js
+        ├── device-files.js
+        ├── svn-pick.html     # SVN Cherry-pick 可视化
+        ├── svn-pick.css
+        └── svn-pick.js
 ```
 
 ## 路线图

@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('quickTool', {
 
   openLogWindow: () => ipcRenderer.invoke('log:open'),
   openDeviceFilesWindow: () => ipcRenderer.invoke('deviceFiles:open'),
+  openSvnPickWindow: () => ipcRenderer.invoke('svn:open'),
   captureScreenshot: () => ipcRenderer.invoke('capture:screenshot'),
   toggleGifCapture: () => ipcRenderer.invoke('capture:gifToggle'),
   convertVideoToGif: () => ipcRenderer.invoke('capture:convertVideo'),
@@ -92,6 +93,30 @@ contextBridge.exposeInMainWorld('quickTool', {
       ipcRenderer.on('ai:event', handler);
       return () => ipcRenderer.removeListener('ai:event', handler);
     },
+  },
+
+  // SVN Cherry-pick 可视化
+  svn: {
+    check: () => ipcRenderer.invoke('svn:check'),
+    diag: () => ipcRenderer.invoke('svn:diag'),
+    getBinaryPath: () => ipcRenderer.invoke('svn:getBinaryPath'),
+    setBinaryPath: (p) => ipcRenderer.invoke('svn:setBinaryPath', p),
+    pickBinaryPath: () => ipcRenderer.invoke('svn:pickBinaryPath'),
+    pickDir: () => ipcRenderer.invoke('svn:pickDir'),
+    info: (target) => ipcRenderer.invoke('svn:info', target),
+    log: (source, options) => ipcRenderer.invoke('svn:log', source, options),
+    update: (target) => ipcRenderer.invoke('svn:update', target),
+    merge: (payload) => ipcRenderer.invoke('svn:merge', payload),
+    status: (target) => ipcRenderer.invoke('svn:status', target),
+    diff: (target) => ipcRenderer.invoke('svn:diff', target),
+    commit: (target, message) => ipcRenderer.invoke('svn:commit', target, message),
+    revert: (target) => ipcRenderer.invoke('svn:revert', target),
+    cleanup: (target) => ipcRenderer.invoke('svn:cleanup', target),
+    sourceName: (source) => ipcRenderer.invoke('svn:sourceName', source),
+    getHistory: () => ipcRenderer.invoke('svn:getHistory'),
+    recordSource: (value) => ipcRenderer.invoke('svn:recordSource', value),
+    recordTarget: (value) => ipcRenderer.invoke('svn:recordTarget', value),
+    removeHistory: (kind, value) => ipcRenderer.invoke('svn:removeHistory', kind, value),
   },
 
   // 真机文件浏览器（adb / hdc 路径设置复用日志工具）

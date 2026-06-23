@@ -60,6 +60,7 @@ function createTray({
   onRefresh,
   onOpenLog,
   onOpenDeviceFiles,
+  onOpenSvnPick,
   onScreenshot,
   onGifToggle,
   onConvertVideo,
@@ -79,6 +80,7 @@ function createTray({
     { type: 'separator' },
     { label: '设备日志分析（adb / hdc）', click: () => onOpenLog && onOpenLog() },
     { label: '真机文件浏览器（adb / hdc）', click: () => onOpenDeviceFiles && onOpenDeviceFiles() },
+    { label: 'SVN Cherry-pick', click: () => onOpenSvnPick && onOpenSvnPick() },
     { type: 'separator' },
     {
       label: `版本 ${app.getVersion()}`,

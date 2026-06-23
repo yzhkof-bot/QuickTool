@@ -16,6 +16,7 @@
     btnVideoToGif: $('btnVideoToGif'),
     btnAdbLog: $('btnAdbLog'),
     btnDeviceFiles: $('btnDeviceFiles'),
+    btnSvnPick: $('btnSvnPick'),
     btnOpenDirEmpty: $('btnOpenDirEmpty'),
     groups: $('groups'),
     empty: $('empty'),
@@ -249,6 +250,9 @@
     }
     if (els.btnDeviceFiles) {
       els.btnDeviceFiles.addEventListener('click', () => api.openDeviceFilesWindow());
+    }
+    if (els.btnSvnPick) {
+      els.btnSvnPick.addEventListener('click', () => api.openSvnPickWindow());
     }
 
     els.groups.addEventListener('click', (e) => {

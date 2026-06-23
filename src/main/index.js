@@ -8,6 +8,8 @@ const { createTray } = require('./tray');
 const logPlatforms = require('./logPlatforms');
 const { createAdbWindow, getAdbWindow } = require('./adbWindow');
 const { createDeviceFilesWindow, getDeviceFilesWindow } = require('./deviceFilesWindow');
+const { createSvnPickWindow, getSvnPickWindow } = require('./svnPickWindow');
+const svnPick = require('./svnPick');
 const { QuickCaptureTool } = require('./captureTool');
 const aiLogChat = require('./aiLogChat');
 
@@ -133,6 +135,12 @@ function sendAiEvent(payload) {
 
 function openDeviceFilesWindow() {
   createDeviceFilesWindow({
+    icon: loadAppIcon(),
+  });
+}
+
+function openSvnPickWindow() {
+  createSvnPickWindow({
     icon: loadAppIcon(),
   });
 }
@@ -551,6 +559,58 @@ function registerIpc() {
     return pf(platformId).collectFileProperties(serial, target.path, options || {});
   });
 
+  // ===== SVN Cherry-pick 可视化 =====
+  ipcMain.handle('svn:open', () => {
+    openSvnPickWindow();
+    return { ok: true };
+  });
+
+  ipcMain.handle('svn:check', () => svnPick.check());
+  ipcMain.handle('svn:diag', () => svnPick.diagnose());
+  ipcMain.handle('svn:getBinaryPath', () => ({ path: svnPick.getBinaryPath() }));
+  ipcMain.handle('svn:setBinaryPath', (_e, p) => svnPick.setBinaryPath(p));
+  ipcMain.handle('svn:pickBinaryPath', async () => {
+    const win = getSvnPickWindow() || mainWindow;
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择 svn 可执行文件',
+      properties: ['openFile'],
+      filters: process.platform === 'win32'
+        ? [{ name: 'svn.exe', extensions: ['exe'] }, { name: '全部文件', extensions: ['*'] }]
+        : [{ name: '全部文件', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+    return svnPick.setBinaryPath(result.filePaths[0]);
+  });
+
+  ipcMain.handle('svn:pickDir', async () => {
+    const win = getSvnPickWindow() || mainWindow;
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择 SVN 工作副本目录',
+      properties: ['openDirectory'],
+    });
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+    return { ok: true, path: result.filePaths[0] };
+  });
+
+  ipcMain.handle('svn:info', (_e, target) => svnPick.info(target));
+  ipcMain.handle('svn:log', (_e, source, options) => svnPick.log(source, options || {}));
+  ipcMain.handle('svn:update', (_e, target) => svnPick.update(target));
+  ipcMain.handle('svn:merge', (_e, payload) => svnPick.merge(payload || {}));
+  ipcMain.handle('svn:status', (_e, target) => svnPick.status(target));
+  ipcMain.handle('svn:diff', (_e, target) => svnPick.diff(target));
+  ipcMain.handle('svn:commit', (_e, target, message) => svnPick.commit(target, message));
+  ipcMain.handle('svn:revert', (_e, target) => svnPick.revert(target));
+  ipcMain.handle('svn:cleanup', (_e, target) => svnPick.cleanup(target));
+  ipcMain.handle('svn:sourceName', (_e, source) => ({ name: svnPick.sourceName(source) }));
+  ipcMain.handle('svn:getHistory', () => svnPick.getHistory());
+  ipcMain.handle('svn:recordSource', (_e, value) => svnPick.recordSource(value));
+  ipcMain.handle('svn:recordTarget', (_e, value) => svnPick.recordTarget(value));
+  ipcMain.handle('svn:removeHistory', (_e, kind, value) => svnPick.removeHistory(kind, value));
+
   // ===== AI 日志分析（codebuddy agent SDK） =====
   ipcMain.handle('ai:health', () => aiLogChat.health());
 
@@ -652,6 +712,7 @@ if (!gotLock) {
       onRefresh: broadcastScriptsChanged,
       onOpenLog: openLogWindow,
       onOpenDeviceFiles: openDeviceFilesWindow,
+      onOpenSvnPick: openSvnPickWindow,
       onScreenshot: startScreenshotCapture,
       onGifToggle: toggleGifCapture,
       onConvertVideo: convertVideoToGif,
