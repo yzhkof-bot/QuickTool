@@ -274,7 +274,7 @@ function bufToText(buf) {
 // - 文本用 svn 自己的 diff（加 --force，即便 svn:mime-type 把 .cs 等误标二进制也能出文本 diff），
 //   保证 diff 结果与 svn 一致、准确；
 // - 同时返回新版本全文，供渲染端展开被折叠的上下文。
-async function fileDiff({ repoRoot, repoPath, revision, action }) {
+async function fileDiff({ repoRoot, repoPath, revision, action, ignoreSpace = false }) {
   const rev = Number(revision);
   if (!Number.isFinite(rev) || rev <= 0) return { ok: false, error: '非法 revision' };
   if (!repoRoot || !repoPath) return { ok: false, error: '缺少文件 URL 信息' };
@@ -326,10 +326,13 @@ async function fileDiff({ repoRoot, repoPath, revision, action }) {
     };
   }
 
-  // 用 svn 自己的 diff（--force 跳过 mime-type 二进制限制）
-  const d = await run(['diff', '-c', String(N), '--force', fileUrl], { timeout: 180000 });
+  // 用 svn 自己的 diff（--force 跳过 mime-type 二进制限制）。
+  // -x --ignore-eol-style：忽略 CRLF/LF 行尾差异，对齐 TortoiseSVN/TortoiseMerge 默认行为，
+  // 否则整文件换行符变化会把每一行都标成改动。可选 -b 进一步忽略空白量变化。
+  const ext = '--ignore-eol-style' + (ignoreSpace ? ' -b' : '');
+  const d = await run(['diff', '-c', String(N), '--force', '-x', ext, fileUrl], { timeout: 180000 });
   if (d.ok) {
-    return { ok: true, mode: 'text', action: act, diff: d.stdout, newText, fileUrl };
+    return { ok: true, mode: 'text', action: act, diff: d.stdout, newText, fileUrl, ignoreSpace };
   }
 
   // 兜底：svn diff 失败时退回 cat 双版本本地比对

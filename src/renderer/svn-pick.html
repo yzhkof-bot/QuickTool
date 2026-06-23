@@ -10,30 +10,13 @@
   </head>
   <body class="sp-body">
     <header class="sp-toolbar">
-      <div class="sp-row">
+      <div class="sp-row top-row">
         <div class="field">
           <label>SVN</label>
           <span id="svnStatus" class="sp-status">检测中…</span>
           <button id="btnDiag" class="icon-btn" title="诊断 svn 路径">ⓘ</button>
         </div>
-        <div class="field grow">
-          <label>来源分支</label>
-          <input id="sourceInput" class="inp src-inp" type="text" list="sourceHistory"
-                 placeholder="来源分支 URL 或本地工作副本目录（如 https://svn.../branches/feature 或 D:\optmini）" autocomplete="off" spellcheck="false" />
-          <datalist id="sourceHistory"></datalist>
-          <button id="btnPickSourceDir" class="btn" title="选择本地工作副本目录作为来源">浏览…</button>
-          <button id="btnLoadLog" class="btn primary">加载来源日志</button>
-        </div>
-      </div>
-      <div class="sp-row">
-        <div class="field grow">
-          <label>目标副本</label>
-          <input id="targetInput" class="inp tgt-inp" type="text" list="targetHistory"
-                 placeholder="目标 SVN 工作副本目录（本地路径）" autocomplete="off" spellcheck="false" />
-          <datalist id="targetHistory"></datalist>
-          <button id="btnPickDir" class="btn">浏览…</button>
-          <span id="targetInfo" class="hint"></span>
-        </div>
+        <span class="status-spacer"></span>
         <div class="field">
           <label>条数</label>
           <input id="limitInput" class="inp limit-inp" type="number" min="0" value="100" title="留空或 0 表示拉取全部历史（可能较慢）" placeholder="全部" />
@@ -44,6 +27,30 @@
           <button id="btnClearFilter" class="btn" title="清除关键字和作者过滤">清除</button>
         </div>
       </div>
+
+      <div class="dir-block">
+        <div class="dir-grid">
+          <span class="dir-badge from">来源</span>
+          <input id="sourceInput" class="inp src-inp" type="text" list="sourceHistory"
+                 placeholder="来源分支 URL 或本地工作副本目录（如 https://svn.../branches/feature 或 D:\optmini）" autocomplete="off" spellcheck="false" />
+          <button id="btnPickSourceDir" class="btn" title="选择本地工作副本目录作为来源">浏览…</button>
+
+          <span class="dir-badge to">目标</span>
+          <input id="targetInput" class="inp tgt-inp" type="text" list="targetHistory"
+                 placeholder="目标 SVN 工作副本目录（本地路径）" autocomplete="off" spellcheck="false" />
+          <button id="btnPickDir" class="btn">浏览…</button>
+
+          <span class="dir-spacer"></span>
+          <span id="targetInfo" class="hint"></span>
+        </div>
+        <div class="dir-actions">
+          <button id="btnLoadLog" class="btn primary load-btn" title="加载来源分支日志">加载来源日志</button>
+          <button id="btnSwapDirs" class="btn load-btn" title="调换来源与目标路径">⇅ 互换路径</button>
+          <button id="btnCompareDirs" class="btn load-btn" title="来源与目标都是本地目录时，对比两个目录的文件树差异" disabled>🗂 目录对比</button>
+        </div>
+      </div>
+      <datalist id="sourceHistory"></datalist>
+      <datalist id="targetHistory"></datalist>
     </header>
 
     <main class="sp-main">
@@ -128,6 +135,19 @@
           <button id="btnCloseDetail" class="modal-close" type="button">✕</button>
         </div>
         <div id="detailBody" class="modal-body"></div>
+      </div>
+    </div>
+
+    <div id="dirCompareModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <div class="modal-title">本地目录对比</div>
+            <div id="dirCompareSubtitle" class="modal-subtitle"></div>
+          </div>
+          <button id="btnCloseDirCompare" class="modal-close" type="button">✕</button>
+        </div>
+        <div id="dirCompareBody" class="modal-body"></div>
       </div>
     </div>
 

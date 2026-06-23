@@ -22,10 +22,76 @@
   align-items: center;
   gap: 8px;
 }
+.sp-row.top-row { flex-wrap: wrap; }
 
 .sp-toolbar .field.grow {
   flex: 1;
   min-width: 240px;
+}
+
+/* ===== 目录操作区：来源 → 目标 对齐 ===== */
+.dir-block {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+.dir-grid {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 8px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  position: relative;
+}
+.dir-badge {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  padding: 3px 0;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  z-index: 1;
+}
+.dir-badge.from {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+}
+.dir-badge.to {
+  color: var(--success);
+  background: rgba(90, 209, 154, 0.12);
+  border: 1px solid var(--success);
+}
+.dir-grid .src-inp,
+.dir-grid .tgt-inp {
+  width: 100%;
+  min-width: 0;
+}
+.dir-spacer { width: 56px; }
+.dir-grid .hint {
+  max-width: none;
+  grid-column: 2 / 4;
+}
+.dir-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dir-actions .load-btn { flex: 1; }
+.load-btn {
+  align-self: stretch;
+  padding-left: 18px;
+  padding-right: 18px;
+  white-space: nowrap;
 }
 
 .sp-toolbar label {
@@ -574,6 +640,24 @@
   white-space: nowrap;
 }
 
+.detail-diff-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.detail-diff-head .detail-section-title { margin: 0; }
+.diff-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
 /* 美化后的 diff 视图：双行号 gutter + 着色 */
 .diff-pane {
   flex: 1;
@@ -655,6 +739,44 @@
 .diff-fold-icon {
   font-weight: 700;
   letter-spacing: 1px;
+}
+
+/* ===== 本地目录树对比 ===== */
+.dircmp-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.dircmp-counts .dc-add { color: var(--success); }
+.dircmp-counts .dc-del { color: var(--danger); }
+.dircmp-counts .dc-mod { color: var(--warn); }
+.dircmp-trunc { color: var(--warn); }
+.dircmp-onlydiff {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.dircmp-caret {
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 9px;
+  user-select: none;
+}
+.dircmp-row .path-action.S {
+  color: var(--text-dim);
+  font-weight: 400;
 }
 
 /* 二进制文件元信息 */

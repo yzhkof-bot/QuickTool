@@ -10,6 +10,7 @@ const { createAdbWindow, getAdbWindow } = require('./adbWindow');
 const { createDeviceFilesWindow, getDeviceFilesWindow } = require('./deviceFilesWindow');
 const { createSvnPickWindow, getSvnPickWindow } = require('./svnPickWindow');
 const svnPick = require('./svnPick');
+const dirCompare = require('./dirCompare');
 const { QuickCaptureTool } = require('./captureTool');
 const aiLogChat = require('./aiLogChat');
 
@@ -607,6 +608,9 @@ function registerIpc() {
   ipcMain.handle('svn:commit', (_e, target, message) => svnPick.commit(target, message));
   ipcMain.handle('svn:revert', (_e, target) => svnPick.revert(target));
   ipcMain.handle('svn:cleanup', (_e, target) => svnPick.cleanup(target));
+  // 纯本地目录树对比（与 svn 无关）
+  ipcMain.handle('svn:dirCompareTree', (_e, left, right) => dirCompare.compareTree(left, right));
+  ipcMain.handle('svn:dirCompareFile', (_e, left, right, rel) => dirCompare.compareFile(left, right, rel));
   ipcMain.handle('svn:sourceName', (_e, source) => ({ name: svnPick.sourceName(source) }));
   ipcMain.handle('svn:getHistory', () => svnPick.getHistory());
   ipcMain.handle('svn:recordSource', (_e, value) => svnPick.recordSource(value));

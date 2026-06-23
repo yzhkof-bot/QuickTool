@@ -115,6 +115,8 @@ contextBridge.exposeInMainWorld('quickTool', {
     commit: (target, message) => ipcRenderer.invoke('svn:commit', target, message),
     revert: (target) => ipcRenderer.invoke('svn:revert', target),
     cleanup: (target) => ipcRenderer.invoke('svn:cleanup', target),
+    dirCompareTree: (left, right) => ipcRenderer.invoke('svn:dirCompareTree', left, right),
+    dirCompareFile: (left, right, rel) => ipcRenderer.invoke('svn:dirCompareFile', left, right, rel),
     sourceName: (source) => ipcRenderer.invoke('svn:sourceName', source),
     getHistory: () => ipcRenderer.invoke('svn:getHistory'),
     recordSource: (value) => ipcRenderer.invoke('svn:recordSource', value),

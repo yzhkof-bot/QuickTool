@@ -22,6 +22,8 @@
     btnClearFilter: $('btnClearFilter'),
     btnPickSourceDir: $('btnPickSourceDir'),
     btnLoadLog: $('btnLoadLog'),
+    btnSwapDirs: $('btnSwapDirs'),
+    btnCompareDirs: $('btnCompareDirs'),
     btnPickDir: $('btnPickDir'),
     logCount: $('logCount'),
     selectAll: $('selectAll'),
@@ -34,6 +36,10 @@
     detailSubtitle: $('detailSubtitle'),
     detailBody: $('detailBody'),
     btnCloseDetail: $('btnCloseDetail'),
+    dirCompareModal: $('dirCompareModal'),
+    dirCompareSubtitle: $('dirCompareSubtitle'),
+    dirCompareBody: $('dirCompareBody'),
+    btnCloseDirCompare: $('btnCloseDirCompare'),
     commitMsg: $('commitMsg'),
     footerText: $('footerText'),
     busyText: $('busyText'),
@@ -343,6 +349,38 @@
     return source;
   }
 
+  // 与后端 isUrl 保持一致：http(s):// svn:// svn+ssh:// file:// 等都算 URL（非本地目录）
+  function isUrlLike(s) {
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(String(s || '').trim());
+  }
+
+  // 目录对比按钮：仅当来源与目标都是本地路径（非 URL、非空）时可用
+  function updateCompareButton() {
+    if (!els.btnCompareDirs) return;
+    const src = els.sourceInput.value.trim();
+    const tgt = els.targetInput.value.trim();
+    const ok = !!src && !!tgt && !isUrlLike(src) && !isUrlLike(tgt);
+    els.btnCompareDirs.disabled = !ok;
+    els.btnCompareDirs.title = ok
+      ? '对比「来源 ⟷ 目标」两个本地目录的文件树差异'
+      : '来源与目标都为本地目录时可用（当前为空或包含 URL）';
+  }
+
+  function doCompareDirs() {
+    openDirCompare();
+  }
+
+  // 调换来源与目标路径
+  function swapDirs() {
+    const src = els.sourceInput.value;
+    els.sourceInput.value = els.targetInput.value;
+    els.targetInput.value = src;
+    if (!commitMsgDirty) updateCommitMsg();
+    refreshTargetInfo();
+    updateCompareButton();
+    showToast('已调换来源与目标', 'info', 1500);
+  }
+
   async function loadLog() {
     const source = requireSource();
     if (!source) return;
@@ -557,14 +595,21 @@
   const detail = {
     source: '', revision: 0, repoRoot: '', paths: [], selectedPath: '',
     token: 0,
-    cache: new Map(),    // repoPath -> fileDiff 结果（已取到）
-    inflight: new Map(), // repoPath -> 正在进行的请求 Promise（去重）
+    ignoreSpace: false,  // 是否忽略空白量变化（行尾符差异始终忽略，对齐 TortoiseSVN）
+    cache: new Map(),    // cacheKey -> fileDiff 结果（已取到）
+    inflight: new Map(), // cacheKey -> 正在进行的请求 Promise（去重）
   };
+
+  // 缓存键：同一文件在「忽略空白」开/关下结果不同，需分别缓存
+  function diffCacheKey(repoPath) {
+    return (detail.ignoreSpace ? 'S1|' : 'S0|') + repoPath;
+  }
 
   // 取单个文件 diff：命中缓存直接返回；在途请求复用；否则发起并缓存
   function getFileDiff(repoPath) {
-    if (detail.cache.has(repoPath)) return Promise.resolve(detail.cache.get(repoPath));
-    if (detail.inflight.has(repoPath)) return detail.inflight.get(repoPath);
+    const key = diffCacheKey(repoPath);
+    if (detail.cache.has(key)) return Promise.resolve(detail.cache.get(key));
+    if (detail.inflight.has(key)) return detail.inflight.get(key);
     const entry = detail.paths.find((p) => p.path === repoPath);
     const token = detail.token;
     const promise = api.fileDiff({
@@ -572,15 +617,16 @@
       repoPath,
       revision: detail.revision,
       action: entry ? entry.action : '',
+      ignoreSpace: detail.ignoreSpace,
     }).then((res) => {
-      if (detail.token === token) detail.cache.set(repoPath, res);
-      detail.inflight.delete(repoPath);
+      if (detail.token === token) detail.cache.set(key, res);
+      detail.inflight.delete(key);
       return res;
     }).catch((err) => {
-      detail.inflight.delete(repoPath);
+      detail.inflight.delete(key);
       throw err;
     });
-    detail.inflight.set(repoPath, promise);
+    detail.inflight.set(key, promise);
     return promise;
   }
 
@@ -594,7 +640,8 @@
       while (idx < files.length) {
         if (detail.token !== token) return; // 弹窗已切换/关闭
         const p = files[idx++];
-        if (detail.cache.has(p.path) || detail.inflight.has(p.path)) continue;
+        const key = diffCacheKey(p.path);
+        if (detail.cache.has(key) || detail.inflight.has(key)) continue;
         try { await getFileDiff(p.path); } catch (_) { /* 单个失败不影响其它 */ }
       }
     };
@@ -869,8 +916,9 @@
     }
 
     // 命中缓存：直接渲染，不闪 loading
-    if (detail.cache.has(repoPath)) {
-      renderDiffResult(pane, detail.cache.get(repoPath));
+    const key = diffCacheKey(repoPath);
+    if (detail.cache.has(key)) {
+      renderDiffResult(pane, detail.cache.get(key));
       return;
     }
 
@@ -936,16 +984,202 @@
           <div class="path-list">${fileItems}</div>
         </div>
         <div class="detail-diff-pane">
-          <div class="detail-section-title">Diff</div>
+          <div class="detail-diff-head">
+            <span class="detail-section-title">Diff</span>
+            <label class="diff-opt" title="始终忽略行尾符(CRLF/LF)差异；勾选则进一步忽略空白量变化（缩进/行尾空格）">
+              <input id="chkIgnoreSpace" type="checkbox" ${detail.ignoreSpace ? 'checked' : ''} /> 忽略空白
+            </label>
+          </div>
           <div id="detailDiffPane" class="diff-pane"><div class="detail-loading">请选择左侧文件查看 diff</div></div>
         </div>
       </div>
     `;
 
+    const chk = els.detailBody.querySelector('#chkIgnoreSpace');
+    if (chk) {
+      chk.addEventListener('change', () => {
+        detail.ignoreSpace = chk.checked;
+        if (detail.selectedPath) selectDetailFile(detail.selectedPath);
+        prefetchAllDiffs();
+      });
+    }
+
     const firstFile = detail.paths.find((p) => p.kind !== 'dir') || detail.paths[0];
     if (firstFile) selectDetailFile(firstFile.path);
     // 后台并发预取其余文件的 diff，之后切换文件即可秒开
     prefetchAllDiffs();
+  }
+
+  // ===== 本地目录树对比（与 svn 无关，复用 diff 详情的折叠/着色渲染） =====
+  const dirCmp = {
+    left: '', right: '',
+    entries: [],
+    collapsed: new Set(), // 已折叠的目录 path
+    onlyDiff: true,
+    selectedPath: '',
+    token: 0,
+    cache: new Map(),     // relPath -> compareFile 结果
+  };
+
+  function statusLetter(s) {
+    return s === 'added' ? 'A' : s === 'removed' ? 'D' : s === 'modified' ? 'M' : 'S';
+  }
+  function statusSymbol(s) {
+    return s === 'added' ? 'A' : s === 'removed' ? 'D' : s === 'modified' ? 'M' : '·';
+  }
+
+  // 某节点是否被某个已折叠的祖先目录隐藏
+  function isHiddenByCollapse(p) {
+    if (dirCmp.collapsed.size === 0) return false;
+    for (const c of dirCmp.collapsed) {
+      if (p.startsWith(c + '/')) return true;
+    }
+    return false;
+  }
+
+  function dirCmpVisibleEntries() {
+    return dirCmp.entries.filter((e) => {
+      if (dirCmp.onlyDiff && e.status === 'same') return false;
+      if (isHiddenByCollapse(e.path)) return false;
+      return true;
+    });
+  }
+
+  function renderDirCmpList() {
+    const list = els.dirCompareBody.querySelector('#dirCmpList');
+    if (!list) return;
+    const vis = dirCmpVisibleEntries();
+    if (!vis.length) {
+      list.innerHTML = '<div class="detail-loading">没有可显示的节点</div>';
+      return;
+    }
+    list.innerHTML = vis.map((e) => {
+      const isDir = e.kind === 'dir';
+      const collapsed = isDir && dirCmp.collapsed.has(e.path);
+      const caret = isDir ? (collapsed ? '▶' : '▼') : '';
+      const letter = statusLetter(e.status);
+      const sym = statusSymbol(e.status);
+      const sel = e.path === dirCmp.selectedPath ? ' selected' : '';
+      const pad = 8 + e.depth * 15;
+      return `<div class="path-row dircmp-row${sel}" data-path="${escapeHtml(e.path)}" data-kind="${e.kind}" title="${escapeHtml(e.path)}" style="padding-left:${pad}px">
+          <span class="dircmp-caret" data-caret="${isDir ? '1' : ''}">${caret}</span>
+          <span class="path-action ${letter}">${sym}</span>
+          <span class="path-text">${escapeHtml(e.name)}${isDir ? '/' : ''}</span>
+        </div>`;
+    }).join('');
+  }
+
+  function getDirCmpFile(relPath) {
+    if (dirCmp.cache.has(relPath)) return Promise.resolve(dirCmp.cache.get(relPath));
+    const token = dirCmp.token;
+    return api.dirCompareFile(dirCmp.left, dirCmp.right, relPath).then((res) => {
+      if (dirCmp.token === token) dirCmp.cache.set(relPath, res);
+      return res;
+    });
+  }
+
+  async function selectDirCmpFile(relPath) {
+    dirCmp.selectedPath = relPath;
+    els.dirCompareBody.querySelectorAll('.dircmp-row').forEach((el) => {
+      el.classList.toggle('selected', el.getAttribute('data-path') === relPath);
+    });
+    const pane = els.dirCompareBody.querySelector('#dirCmpDiffPane');
+    if (!pane) return;
+
+    const entry = dirCmp.entries.find((p) => p.path === relPath);
+    if (entry && entry.kind === 'dir') {
+      pane.innerHTML = '<div class="detail-loading">目录节点没有文本 diff，请选择文件</div>';
+      return;
+    }
+
+    if (dirCmp.cache.has(relPath)) {
+      renderDiffResult(pane, dirCmp.cache.get(relPath));
+      return;
+    }
+    pane.innerHTML = '<div class="detail-loading">正在比较该文件…</div>';
+    let res;
+    try {
+      res = await getDirCmpFile(relPath);
+    } catch (e) {
+      if (dirCmp.selectedPath === relPath) {
+        pane.innerHTML = `<div class="detail-loading">比较失败：${escapeHtml(e.message)}</div>`;
+      }
+      return;
+    }
+    if (dirCmp.selectedPath !== relPath) return;
+    if (res && res.mode === 'dir') {
+      pane.innerHTML = '<div class="detail-loading">目录节点没有文本 diff</div>';
+      return;
+    }
+    renderDiffResult(pane, res);
+  }
+
+  function closeDirCompare() {
+    els.dirCompareModal.classList.add('hidden');
+    dirCmp.token += 1;
+  }
+
+  async function openDirCompare() {
+    const left = els.sourceInput.value.trim();
+    const right = els.targetInput.value.trim();
+    if (!left || !right) { showToast('请先填写来源与目标本地目录', 'error'); return; }
+    if (isUrlLike(left) || isUrlLike(right)) {
+      showToast('目录对比仅支持本地目录（来源或目标当前是 URL）', 'error');
+      return;
+    }
+    els.dirCompareSubtitle.textContent = `${left}  ⟷  ${right}`;
+    els.dirCompareBody.innerHTML = '<div class="detail-loading">正在扫描两个目录…</div>';
+    els.dirCompareModal.classList.remove('hidden');
+    dirCmp.token += 1;
+
+    let res;
+    try {
+      res = await api.dirCompareTree(left, right);
+    } catch (e) {
+      els.dirCompareBody.innerHTML = `<div class="detail-loading">对比失败：${escapeHtml(e.message)}</div>`;
+      return;
+    }
+    if (!res || !res.ok) {
+      els.dirCompareBody.innerHTML = `<div class="detail-loading">对比失败：${escapeHtml((res && res.error) || '未知错误')}</div>`;
+      return;
+    }
+
+    dirCmp.left = res.left;
+    dirCmp.right = res.right;
+    dirCmp.entries = res.entries || [];
+    dirCmp.collapsed = new Set();
+    dirCmp.onlyDiff = true;
+    dirCmp.selectedPath = '';
+    dirCmp.cache = new Map();
+
+    const c = res.counts || { added: 0, removed: 0, modified: 0, same: 0 };
+    const truncatedNote = res.truncated
+      ? ` <span class="dircmp-trunc">· 已达上限，仅显示部分</span>` : '';
+    const countsHtml = `共 ${dirCmp.entries.length} 项 · `
+      + `<span class="dc-add">新增 ${c.added}</span> · `
+      + `<span class="dc-del">删除 ${c.removed}</span> · `
+      + `<span class="dc-mod">修改 ${c.modified}</span>${truncatedNote}`;
+
+    els.dirCompareBody.innerHTML = `
+      <div class="dircmp-bar">
+        <span class="dircmp-counts">${countsHtml}</span>
+        <label class="dircmp-onlydiff"><input type="checkbox" id="dirCmpOnlyDiff" checked /> 只看差异</label>
+      </div>
+      <div class="detail-split">
+        <div class="detail-files">
+          <div class="detail-section-title">文件树（来源 ⟷ 目标）</div>
+          <div class="path-list" id="dirCmpList"></div>
+        </div>
+        <div class="detail-diff-pane">
+          <div class="detail-section-title">Diff（左=来源 / 右=目标）</div>
+          <div id="dirCmpDiffPane" class="diff-pane"><div class="detail-loading">请选择左侧文件查看差异</div></div>
+        </div>
+      </div>
+    `;
+    renderDirCmpList();
+
+    const firstDiff = dirCmp.entries.find((e) => e.kind === 'file' && e.status !== 'same');
+    if (firstDiff) selectDirCmpFile(firstDiff.path);
   }
 
   // ===== 拖拽目录到输入框 =====
@@ -994,8 +1228,42 @@
       const row = e.target.closest('.path-row[data-path]');
       if (row) selectDetailFile(row.getAttribute('data-path'));
     });
+    els.btnCloseDirCompare.addEventListener('click', closeDirCompare);
+    els.dirCompareModal.addEventListener('click', (e) => {
+      if (e.target === els.dirCompareModal) closeDirCompare();
+    });
+    els.dirCompareBody.addEventListener('change', (e) => {
+      if (e.target && e.target.id === 'dirCmpOnlyDiff') {
+        dirCmp.onlyDiff = e.target.checked;
+        renderDirCmpList();
+      }
+    });
+    els.dirCompareBody.addEventListener('click', (e) => {
+      const fold = e.target.closest('.diff-fold[data-fold]');
+      if (fold) {
+        const rows = foldStore.get(fold.getAttribute('data-fold'));
+        if (rows != null) {
+          foldStore.delete(fold.getAttribute('data-fold'));
+          fold.outerHTML = rows;
+        }
+        return;
+      }
+      const row = e.target.closest('.dircmp-row[data-path]');
+      if (!row) return;
+      const p = row.getAttribute('data-path');
+      if (row.getAttribute('data-kind') === 'dir') {
+        if (dirCmp.collapsed.has(p)) dirCmp.collapsed.delete(p);
+        else dirCmp.collapsed.add(p);
+        renderDirCmpList();
+      } else {
+        selectDirCmpFile(p);
+      }
+    });
+
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !els.detailModal.classList.contains('hidden')) closeDetail();
+      if (e.key !== 'Escape') return;
+      if (!els.dirCompareModal.classList.contains('hidden')) { closeDirCompare(); return; }
+      if (!els.detailModal.classList.contains('hidden')) closeDetail();
     });
 
     els.btnDiag.addEventListener('click', toggleDiag);
@@ -1014,6 +1282,7 @@
       if (res && res.ok) {
         els.targetInput.value = res.path;
         refreshTargetInfo();
+        updateCompareButton();
       }
     });
 
@@ -1022,13 +1291,18 @@
       if (res && res.ok) {
         els.sourceInput.value = res.path;
         if (!commitMsgDirty) updateCommitMsg();
+        updateCompareButton();
       }
     });
     els.targetInput.addEventListener('change', refreshTargetInfo);
+    els.sourceInput.addEventListener('input', updateCompareButton);
+    els.targetInput.addEventListener('input', updateCompareButton);
+    if (els.btnCompareDirs) els.btnCompareDirs.addEventListener('click', doCompareDirs);
+    if (els.btnSwapDirs) els.btnSwapDirs.addEventListener('click', swapDirs);
 
     // 拖拽目录到输入框
-    setupDropZone(els.sourceInput, () => { if (!commitMsgDirty) updateCommitMsg(); });
-    setupDropZone(els.targetInput, () => { refreshTargetInfo(); });
+    setupDropZone(els.sourceInput, () => { if (!commitMsgDirty) updateCommitMsg(); updateCompareButton(); });
+    setupDropZone(els.targetInput, () => { refreshTargetInfo(); updateCompareButton(); });
 
     // 行点击 / 勾选
     els.logRows.addEventListener('click', (e) => {
@@ -1086,6 +1360,7 @@
     if (els.targetInput.value.trim()) refreshTargetInfo();
     renderLog();
     renderSelected();
+    updateCompareButton();
   }
 
   init();
