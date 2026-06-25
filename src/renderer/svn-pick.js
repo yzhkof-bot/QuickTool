@@ -44,6 +44,7 @@
     footerText: $('footerText'),
     busyText: $('busyText'),
     toast: $('toast'),
+    fileCtxMenu: $('fileCtxMenu'),
     btnUpdate: $('btnUpdate'),
     btnDryRun: $('btnDryRun'),
     btnMerge: $('btnMerge'),
@@ -833,6 +834,7 @@
 
   function closeDetail() {
     els.detailModal.classList.add('hidden');
+    hideFileCtxMenu();
     detail.token += 1; // 让后台预取停止
   }
 
@@ -1116,6 +1118,7 @@
 
   function closeDirCompare() {
     els.dirCompareModal.classList.add('hidden');
+    hideFileCtxMenu();
     dirCmp.token += 1;
   }
 
@@ -1182,6 +1185,30 @@
     if (firstDiff) selectDirCmpFile(firstDiff.path);
   }
 
+  // ===== 文件列表右键菜单（复制文件路径 / 文件名） =====
+  let ctxMenuPath = '';
+
+  function hideFileCtxMenu() {
+    els.fileCtxMenu.classList.add('hidden');
+  }
+
+  function showFileCtxMenu(x, y, p) {
+    ctxMenuPath = p || '';
+    els.fileCtxMenu.classList.remove('hidden');
+    const rect = els.fileCtxMenu.getBoundingClientRect();
+    const left = Math.min(x, window.innerWidth - rect.width - 8);
+    const top = Math.min(y, window.innerHeight - rect.height - 8);
+    els.fileCtxMenu.style.left = Math.max(8, left) + 'px';
+    els.fileCtxMenu.style.top = Math.max(8, top) + 'px';
+  }
+
+  function onFileRowContextMenu(e) {
+    const row = e.target.closest('.path-row[data-path]');
+    if (!row) return;
+    e.preventDefault();
+    showFileCtxMenu(e.clientX, e.clientY, row.getAttribute('data-path'));
+  }
+
   // ===== 拖拽目录到输入框 =====
   function setupDropZone(input, onPath) {
     const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
@@ -1228,6 +1255,25 @@
       const row = e.target.closest('.path-row[data-path]');
       if (row) selectDetailFile(row.getAttribute('data-path'));
     });
+    els.detailBody.addEventListener('contextmenu', onFileRowContextMenu);
+    els.dirCompareBody.addEventListener('contextmenu', onFileRowContextMenu);
+
+    els.fileCtxMenu.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const action = btn.getAttribute('data-action');
+      const p = ctxMenuPath;
+      hideFileCtxMenu();
+      if (!p) return;
+      const text = action === 'copyName' ? fileBaseName(p) : p;
+      const ok = api.copyText ? api.copyText(text) : false;
+      showToast(ok ? '已复制：' + text : '复制失败', ok ? 'success' : 'error', 1800);
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#fileCtxMenu')) hideFileCtxMenu();
+    });
+    window.addEventListener('blur', hideFileCtxMenu);
+    window.addEventListener('resize', hideFileCtxMenu);
     els.btnCloseDirCompare.addEventListener('click', closeDirCompare);
     els.dirCompareModal.addEventListener('click', (e) => {
       if (e.target === els.dirCompareModal) closeDirCompare();
@@ -1262,6 +1308,7 @@
 
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
+      if (!els.fileCtxMenu.classList.contains('hidden')) { hideFileCtxMenu(); return; }
       if (!els.dirCompareModal.classList.contains('hidden')) { closeDirCompare(); return; }
       if (!els.detailModal.classList.contains('hidden')) closeDetail();
     });

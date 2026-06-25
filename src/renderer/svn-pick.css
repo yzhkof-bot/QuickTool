@@ -492,6 +492,34 @@
 }
 .commit-btn { width: 100%; }
 
+/* ===== 右键菜单 ===== */
+.context-menu {
+  position: fixed;
+  z-index: 10002;
+  min-width: 150px;
+  padding: 5px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.context-menu button {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.context-menu button:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
 /* ===== 改动详情弹窗 ===== */
 .modal {
   position: fixed;

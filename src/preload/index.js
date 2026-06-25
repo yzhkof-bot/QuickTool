@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils, clipboard } = require('electron');
 
 contextBridge.exposeInMainWorld('quickTool', {
   listScripts: () => ipcRenderer.invoke('scripts:list'),
@@ -117,6 +117,14 @@ contextBridge.exposeInMainWorld('quickTool', {
     cleanup: (target) => ipcRenderer.invoke('svn:cleanup', target),
     dirCompareTree: (left, right) => ipcRenderer.invoke('svn:dirCompareTree', left, right),
     dirCompareFile: (left, right, rel) => ipcRenderer.invoke('svn:dirCompareFile', left, right, rel),
+    copyText: (text) => {
+      try {
+        clipboard.writeText(String(text == null ? '' : text));
+        return true;
+      } catch (_) {
+        return false;
+      }
+    },
     sourceName: (source) => ipcRenderer.invoke('svn:sourceName', source),
     getHistory: () => ipcRenderer.invoke('svn:getHistory'),
     recordSource: (value) => ipcRenderer.invoke('svn:recordSource', value),
